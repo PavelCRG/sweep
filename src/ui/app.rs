@@ -47,6 +47,7 @@ pub fn run(
     let progressive_scan = initial_roots
         .as_ref()
         .is_some_and(|roots| independent_roots(roots));
+    let initial_scan = initial_roots.is_some();
     let mut scan = initial_roots.map(|roots| {
         if progressive_scan {
             start_initial_scan(roots, Arc::clone(&cancelled))
@@ -54,7 +55,21 @@ pub fn run(
             start_scan(roots, Arc::clone(&cancelled))
         }
     });
-    let mut ready_roots = std::collections::HashSet::new();
+    let mut ready_roots: std::collections::HashSet<usize> = if initial_scan {
+        std::collections::HashSet::new()
+    } else {
+        nodes[0].children.iter().copied().collect()
+    };
+    let root_indices: std::collections::HashMap<_, _> = nodes[0]
+        .children
+        .iter()
+        .map(|&index| (nodes[index].path.clone(), index))
+        .collect();
+    let mut scan_indices: std::collections::HashMap<
+        std::path::PathBuf,
+        std::collections::HashMap<std::path::PathBuf, usize>,
+    > = std::collections::HashMap::new();
+    let mut available_nodes = std::collections::HashSet::new();
     if scan.is_some() {
         s.status = s
             .lang
@@ -91,9 +106,16 @@ pub fn run(
                             s.lang.text("Esc cancels", "Esc — отмена")
                         );
                     }
+                    ScanUpdate::RootEntries(path, entries) => {
+                        if let Some(&root) = root_indices.get(&path) {
+                            let index = scan_indices.entry(path).or_default();
+                            available_nodes
+                                .extend(install_scanned_entries(nodes, root, index, entries));
+                        }
+                    }
                     ScanUpdate::RootFinished(path, result) => match result {
-                        Ok(tree) => {
-                            if let Some(root) = install_scanned_root(nodes, &path, tree) {
+                        Ok(_) => {
+                            if let Some(&root) = root_indices.get(&path) {
                                 ready_roots.insert(root);
                                 volume_usage = volume_usages(nodes, demo);
                             }
@@ -164,7 +186,7 @@ pub fn run(
             .and_then(|i| nodes[0].children.iter().position(|&root| root == i))
             .and_then(|i| volume_usage.get(i).copied())
             .unwrap_or_else(|| aggregate_usage(&volume_usage));
-        terminal.draw(|f| draw(f, nodes, &s, &volume_usage, usage, demo))?;
+        terminal.draw(|f| draw(f, nodes, &s, &volume_usage, usage, demo, scan.is_some()))?;
         if scan.is_some() && !event::poll(Duration::from_millis(100))? {
             continue;
         }
@@ -204,7 +226,8 @@ pub fn run(
                                     selected_volume(nodes, s.current)
                                 };
                                 if nodes[item].directory
-                                    && root.is_some_and(|root| ready_roots.contains(&root))
+                                    && (available_nodes.contains(&item)
+                                        || root.is_some_and(|root| ready_roots.contains(&root)))
                                 {
                                     s.current = item;
                                     s.selected = 0;
@@ -246,8 +269,8 @@ pub fn run(
                             s.status = s
                                 .lang
                                 .text(
-                                    "Cleanup unlocks when scanning finishes",
-                                    "Очистка станет доступна после сканирования",
+                                    "Cleanup unlocks when this disk finishes scanning",
+                                    "Очистка станет доступна после сканирования этого диска",
                                 )
                                 .into();
                         }
@@ -329,7 +352,16 @@ pub fn run(
                 KeyCode::Tab => s.focus_right = !s.focus_right,
                 KeyCode::Char('d') => {
                     if let Some(&i) = shown.get(s.selected) {
-                        if nodes[0].name == "All disks" && nodes[0].children.contains(&i) {
+                        if !ready_to_clean(nodes, i, &ready_roots) {
+                            s.status = s
+                                .lang
+                                .text(
+                                    "Wait for this disk to finish scanning before cleanup",
+                                    "Дождитесь завершения сканирования диска перед очисткой",
+                                )
+                                .into();
+                            s.confirm_delete = false;
+                        } else if nodes[0].name == "All disks" && nodes[0].children.contains(&i) {
                             s.status = s
                                 .lang
                                 .text(
@@ -405,7 +437,11 @@ pub fn run(
 enum ScanUpdate {
     Progress(core::scan::ScanProgress),
     RootProgress(std::path::PathBuf, core::scan::ScanProgress),
-    RootFinished(std::path::PathBuf, std::io::Result<Vec<Node>>),
+    RootEntries(std::path::PathBuf, Vec<core::scan::ScanEntry>),
+    RootFinished(
+        std::path::PathBuf,
+        std::io::Result<core::scan::ScanProgress>,
+    ),
     InitialFinished,
     Finished(std::io::Result<Vec<Node>>),
 }
@@ -416,7 +452,7 @@ struct ScanJob {
 }
 
 fn start_scan(roots: Vec<std::path::PathBuf>, cancelled: Arc<AtomicBool>) -> ScanJob {
-    let (updates_tx, updates) = mpsc::channel();
+    let (updates_tx, updates) = mpsc::sync_channel(16);
     let progress_tx = updates_tx.clone();
     let worker_cancelled = Arc::clone(&cancelled);
     thread::spawn(move || {
@@ -435,7 +471,7 @@ fn start_scan(roots: Vec<std::path::PathBuf>, cancelled: Arc<AtomicBool>) -> Sca
 }
 
 fn start_initial_scan(roots: Vec<std::path::PathBuf>, cancelled: Arc<AtomicBool>) -> ScanJob {
-    let (updates_tx, updates) = mpsc::channel();
+    let (updates_tx, updates) = mpsc::sync_channel(16);
     let worker_cancelled = Arc::clone(&cancelled);
     thread::spawn(move || {
         let roots = Arc::new(roots);
@@ -452,14 +488,18 @@ fn start_initial_scan(roots: Vec<std::path::PathBuf>, cancelled: Arc<AtomicBool>
                         break;
                     };
                     let progress = updates.clone();
-                    let result = core::scan::scan_many_with_progress(
-                        std::slice::from_ref(&root),
+                    let entries = updates.clone();
+                    let result = core::scan::scan_one_with_updates(
+                        &root,
                         &cancelled,
                         |count| {
                             if count.visited % 250 == 0 {
                                 let _ =
                                     progress.send(ScanUpdate::RootProgress(root.clone(), count));
                             }
+                        },
+                        |batch| {
+                            let _ = entries.send(ScanUpdate::RootEntries(root.clone(), batch));
                         },
                     );
                     let _ = updates.send(ScanUpdate::RootFinished(root, result));
@@ -483,33 +523,50 @@ fn independent_roots(roots: &[std::path::PathBuf]) -> bool {
     })
 }
 
-fn install_scanned_root(
+fn install_scanned_entries(
     nodes: &mut Vec<Node>,
-    requested: &std::path::Path,
-    mut scanned: Vec<Node>,
-) -> Option<usize> {
-    if scanned.is_empty() {
-        return None;
-    }
-    let root = nodes[0]
-        .children
-        .iter()
-        .copied()
-        .find(|&i| nodes[i].path == requested)?;
-    let size = scanned[0].size;
-    let files = scanned[0].files;
-    let offset = nodes.len();
-    let remap = |index: usize| if index == 0 { root } else { offset + index - 1 };
-    for node in &mut scanned {
-        for child in &mut node.children {
-            *child = remap(*child);
+    root: usize,
+    paths: &mut std::collections::HashMap<std::path::PathBuf, usize>,
+    entries: Vec<core::scan::ScanEntry>,
+) -> Vec<usize> {
+    let mut available = Vec::with_capacity(entries.len());
+    for entry in entries {
+        let Some(parent) = entry.parent else {
+            let path = entry.node.path.clone();
+            nodes[root] = entry.node;
+            paths.insert(path, root);
+            available.push(root);
+            continue;
+        };
+        let Some(&parent_index) = paths.get(&parent) else {
+            continue;
+        };
+        let size = entry.node.size;
+        let files = entry.node.files;
+        let path = entry.node.path.clone();
+        let index = nodes.len();
+        nodes[parent_index].children.push(index);
+        nodes.push(entry.node);
+        paths.insert(path, index);
+        available.push(index);
+
+        let mut ancestor = Some(parent_index);
+        while let Some(index) = ancestor {
+            nodes[index].size = nodes[index].size.saturating_add(size);
+            nodes[index].files = nodes[index].files.saturating_add(files);
+            if index == root {
+                break;
+            }
+            ancestor = nodes[index]
+                .path
+                .parent()
+                .and_then(|parent| paths.get(parent))
+                .copied();
         }
+        nodes[0].size = nodes[0].size.saturating_add(size);
+        nodes[0].files = nodes[0].files.saturating_add(files);
     }
-    nodes[root] = scanned[0].clone();
-    nodes.extend(scanned.into_iter().skip(1));
-    nodes[0].size = nodes[0].size.saturating_add(size);
-    nodes[0].files = nodes[0].files.saturating_add(files);
-    Some(root)
+    available
 }
 
 pub fn pending_tree(roots: &[std::path::PathBuf]) -> Vec<Node> {
@@ -666,6 +723,7 @@ fn draw(
     volume_usage: &[bar::Usage],
     usage: bar::Usage,
     demo: bool,
+    scanning: bool,
 ) {
     let area = f.area();
     let overview = s.current == 0;
@@ -828,7 +886,7 @@ fn draw(
         .and_then(|i| nodes[0].children.iter().position(|&root| root == i))
         .and_then(|i| volume_usage.get(i).copied());
     let detail = selected
-        .map(|i| details(nodes, i, selected_usage, demo, s.lang))
+        .map(|i| details(nodes, i, selected_usage, demo, s.lang, scanning))
         .unwrap_or_else(|| {
             vec![Line::from(s.lang.text(
                 "No items in this folder",
@@ -905,9 +963,10 @@ fn details(
     usage: Option<bar::Usage>,
     demo: bool,
     lang: Language,
+    scanning: bool,
 ) -> Vec<Line<'static>> {
     if let Some(usage) = usage {
-        return volume_details(nodes, i, usage, demo, lang);
+        return volume_details(nodes, i, usage, demo, lang, scanning);
     }
     let n = &nodes[i];
     let cause = core::browse::culprit(nodes, i).filter(|&c| c != i);
@@ -1019,6 +1078,7 @@ fn volume_details(
     usage: bar::Usage,
     demo: bool,
     lang: Language,
+    scanning: bool,
 ) -> Vec<Line<'static>> {
     let total = usage.total();
     let mut lines = vec![
@@ -1057,32 +1117,44 @@ fn volume_details(
             lang.text("Files scanned", "Найдено файлов"),
             nodes[i].files
         )),
-        Line::from(""),
-        Line::from(vec![
-            Span::styled("■ ", Style::default().fg(Color::Red)),
-            Span::raw(format!(
-                "{}  {}",
-                lang.text("Junk", "Мусор"),
-                human(usage.junk)
-            )),
-        ]),
-        Line::from(vec![
-            Span::styled("■ ", Style::default().fg(Color::Yellow)),
-            Span::raw(format!(
-                "{}  {}",
-                lang.text("Unused", "Давно не открывали"),
-                human(usage.unused)
-            )),
-        ]),
-        Line::from(vec![
-            Span::styled("■ ", Style::default().fg(Color::Magenta)),
-            Span::raw(format!(
-                "{}  {}",
-                lang.text("Other on disk", "Остальные данные диска"),
-                human(usage.other)
-            )),
-        ]),
     ];
+    if scanning {
+        lines.push(Line::from(Span::styled(
+            lang.text(
+                "Live scan · folder sizes are partial",
+                "Идёт сканирование · размеры папок пока неполные",
+            ),
+            Style::default().fg(Color::Yellow),
+        )));
+    } else {
+        lines.push(Line::from(""));
+        lines.extend([
+            Line::from(vec![
+                Span::styled("■ ", Style::default().fg(Color::Red)),
+                Span::raw(format!(
+                    "{}  {}",
+                    lang.text("Junk", "Мусор"),
+                    human(usage.junk)
+                )),
+            ]),
+            Line::from(vec![
+                Span::styled("■ ", Style::default().fg(Color::Yellow)),
+                Span::raw(format!(
+                    "{}  {}",
+                    lang.text("Unused", "Давно не открывали"),
+                    human(usage.unused)
+                )),
+            ]),
+            Line::from(vec![
+                Span::styled("■ ", Style::default().fg(Color::Magenta)),
+                Span::raw(format!(
+                    "{}  {}",
+                    lang.text("Other on disk", "Остальные данные диска"),
+                    human(usage.other)
+                )),
+            ]),
+        ]);
+    }
     if demo {
         lines.push(Line::from(""));
         lines.push(Line::from(Span::styled(
@@ -1163,6 +1235,19 @@ fn visible_children(nodes: &[Node], store: &Store) -> Vec<usize> {
         .collect()
 }
 
+fn ready_to_clean(
+    nodes: &[Node],
+    item: usize,
+    ready_roots: &std::collections::HashSet<usize>,
+) -> bool {
+    let root = if nodes[0].children.contains(&item) {
+        Some(item)
+    } else {
+        selected_volume(nodes, item)
+    };
+    root.is_some_and(|root| ready_roots.contains(&root))
+}
+
 fn usage_spans(usage: bar::Usage, width: usize) -> Vec<Span<'static>> {
     let amounts = [
         usage.personal,
@@ -1221,7 +1306,8 @@ fn fit(value: &str, width: usize) -> String {
 mod tests {
     use super::{
         aggregate_usage, cleanup_candidate, draw, ensure_scan_root, independent_roots,
-        install_scanned_root, pending_tree, scan_roots, selected_volume, volume_usages,
+        install_scanned_entries, pending_tree, ready_to_clean, scan_roots, selected_volume,
+        volume_usages,
     };
     use crate::{
         core,
@@ -1241,7 +1327,7 @@ mod tests {
         assert_eq!(nodes[1].path, roots[0]);
         assert_eq!(nodes[2].path, roots[1]);
         assert!(nodes[1].directory && nodes[2].directory);
-        let rendered = render_text(&nodes, Language::En);
+        let rendered = render_text(&nodes, Language::En, false);
         assert!(rendered.contains("Disk overview"), "{rendered}");
         assert!(rendered.contains("C:"), "{rendered}");
         assert!(rendered.contains("D:"), "{rendered}");
@@ -1252,41 +1338,60 @@ mod tests {
         let root = std::path::PathBuf::from("C:\\");
         let file = std::path::PathBuf::from("C:\\sample.bin");
         let mut nodes = pending_tree(&[root.clone(), std::path::PathBuf::from("D:\\")]);
-        let scanned = vec![
-            core::Node {
-                path: root.clone(),
-                name: "C:".into(),
-                size: 12,
-                files: 1,
-                directory: true,
-                atime: None,
-                mtime: None,
-                children: vec![1],
-                tag: core::classify::Tag::Personal,
-                reason: None,
-                category: core::categories::Category::Other,
-            },
-            core::Node {
-                path: file.clone(),
-                name: "sample.bin".into(),
-                size: 12,
-                files: 1,
-                directory: false,
-                atime: None,
-                mtime: None,
-                children: vec![],
-                tag: core::classify::Tag::Personal,
-                reason: None,
-                category: core::categories::Category::Other,
-            },
-        ];
-        let volume = install_scanned_root(&mut nodes, &root, scanned).unwrap();
-        assert_eq!(volume, 1);
+        let mut paths = std::collections::HashMap::new();
+        let root_index = install_scanned_entries(
+            &mut nodes,
+            1,
+            &mut paths,
+            vec![core::scan::ScanEntry {
+                parent: None,
+                node: core::Node {
+                    path: root.clone(),
+                    name: "C:".into(),
+                    size: 0,
+                    files: 0,
+                    directory: true,
+                    atime: None,
+                    mtime: None,
+                    children: vec![],
+                    tag: core::classify::Tag::Personal,
+                    reason: None,
+                    category: core::categories::Category::Other,
+                },
+            }],
+        );
+        assert_eq!(root_index, [1]);
+        let file_index = install_scanned_entries(
+            &mut nodes,
+            1,
+            &mut paths,
+            vec![core::scan::ScanEntry {
+                parent: Some(root.clone()),
+                node: core::Node {
+                    path: file.clone(),
+                    name: "sample.bin".into(),
+                    size: 12,
+                    files: 1,
+                    directory: false,
+                    atime: None,
+                    mtime: None,
+                    children: vec![],
+                    tag: core::classify::Tag::Personal,
+                    reason: None,
+                    category: core::categories::Category::Other,
+                },
+            }],
+        );
+        assert_eq!(file_index, [3]);
         assert_eq!(nodes[0].size, 12);
-        assert_eq!(nodes[volume].size, 12);
-        assert_eq!(nodes[volume].children, [3]);
+        assert_eq!(nodes[1].size, 12);
+        assert_eq!(nodes[1].children, [3]);
         assert_eq!(nodes[3].path, file);
         assert_eq!(nodes[0].children, [1, 2]);
+        let mut ready = std::collections::HashSet::new();
+        assert!(!ready_to_clean(&nodes, 3, &ready));
+        ready.insert(1);
+        assert!(ready_to_clean(&nodes, 3, &ready));
     }
 
     #[test]
@@ -1309,7 +1414,7 @@ mod tests {
     fn demo_opens_on_the_disk_overview() {
         let mut nodes = core::demo::tree();
         ensure_scan_root(&mut nodes);
-        let rendered = render_text(&nodes, Language::En);
+        let rendered = render_text(&nodes, Language::En, false);
         assert!(rendered.contains("Disk overview"), "{rendered}");
         assert!(rendered.contains("DISK DETAILS"), "{rendered}");
     }
@@ -1368,13 +1473,22 @@ mod tests {
     fn russian_language_renders_localized_overview_and_volume_details() {
         let mut nodes = core::demo::tree();
         ensure_scan_root(&mut nodes);
-        let rendered = render_text(&nodes, Language::Ru);
+        let rendered = render_text(&nodes, Language::Ru, false);
         assert!(rendered.contains("Обзор дисков"), "{rendered}");
         assert!(rendered.contains("ДИСК"), "{rendered}");
         assert!(rendered.contains("Ёмкость диска"), "{rendered}");
     }
 
-    fn render_text(nodes: &[core::Node], lang: Language) -> String {
+    #[test]
+    fn live_scan_marks_folder_sizes_partial_and_hides_final_categories() {
+        let mut nodes = core::demo::tree();
+        ensure_scan_root(&mut nodes);
+        let rendered = render_text(&nodes, Language::En, true);
+        assert!(rendered.contains("Live scan"), "{rendered}");
+        assert!(!rendered.contains("Other on disk"), "{rendered}");
+    }
+
+    fn render_text(nodes: &[core::Node], lang: Language, scanning: bool) -> String {
         let volume_usage = volume_usages(nodes, true);
         let mut terminal = Terminal::new(TestBackend::new(140, 38)).unwrap();
         terminal
@@ -1386,6 +1500,7 @@ mod tests {
                     &volume_usage,
                     volume_usage[0],
                     true,
+                    scanning,
                 )
             })
             .unwrap();

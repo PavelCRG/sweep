@@ -32,8 +32,8 @@ fn same_or_below(path: &str, root: &str) -> bool {
     let path = path.trim_end_matches(['\\', '/']);
     let root = root.trim_end_matches(['\\', '/']);
     path == root
-        || root
-            .strip_prefix(path)
+        || path
+            .strip_prefix(root)
             .is_some_and(|tail| tail.starts_with(['\\', '/']))
 }
 
@@ -92,4 +92,18 @@ pub fn classify(
         return (Tag::Unused, Some("Not touched in 6+ months".into()));
     }
     (Tag::Personal, None)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::same_or_below;
+
+    #[test]
+    fn system_path_matching_respects_directory_boundaries() {
+        let root = r"c:\windows";
+        assert!(same_or_below(root, root));
+        assert!(same_or_below(r"c:\windows\system32", root));
+        assert!(!same_or_below(r"c:\windows-old", root));
+        assert!(!same_or_below(r"c:\users\pavel", root));
+    }
 }

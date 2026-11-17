@@ -7,7 +7,7 @@
 Fast, keyboard-first disk space analysis for Windows and Linux.
 
 [![CI](https://github.com/PavelCRG/sweep/actions/workflows/ci.yml/badge.svg)](https://github.com/PavelCRG/sweep/actions/workflows/ci.yml)
-[![Release](https://img.shields.io/badge/release-v0.1.1-22d3ee)](https://github.com/PavelCRG/sweep/releases/tag/v0.1.1)
+[![Release](https://img.shields.io/badge/release-v0.1.2-22d3ee)](https://github.com/PavelCRG/sweep/releases/tag/v0.1.2)
 [![Windows · Linux](https://img.shields.io/badge/platform-Windows%20%7C%20Linux-64748b)](#install)
 
 </div>
@@ -21,7 +21,7 @@ Sweep opens with an overview of every scanned volume, shows each disk's own capa
 
 ## Install
 
-Download the archive for your system from the [v0.1.1 release](https://github.com/PavelCRG/sweep/releases/tag/v0.1.1), extract it, and run `sweep` (or `sweep.exe` on Windows). Each release includes a SHA-256 checksum file.
+Download the archive for your system from the [v0.1.2 release](https://github.com/PavelCRG/sweep/releases/tag/v0.1.2), extract it, and run `sweep` (or `sweep.exe` on Windows). Each release includes a SHA-256 checksum file.
 
 Or build the standalone binary from source with Rust installed:
 
@@ -79,7 +79,7 @@ cargo test --locked
 cargo build --release --locked
 ```
 
-GitHub Actions checks Windows and Linux builds. Version tags such as `v0.1.1` produce standalone archives and SHA-256 checksums.
+GitHub Actions checks Windows and Linux builds. Version tags such as `v0.1.2` produce standalone archives and SHA-256 checksums.
 
 The TUI starts in English; use `--lang ru` to start in Russian or press `l` to switch while browsing.
 

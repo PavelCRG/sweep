@@ -1361,9 +1361,10 @@ mod tests {
 
     #[test]
     fn completed_drive_becomes_browsable_while_other_drives_scan() {
-        let root = std::path::PathBuf::from("C:\\");
-        let file = std::path::PathBuf::from("C:\\sample.bin");
-        let mut nodes = pending_tree(&[root.clone(), std::path::PathBuf::from("D:\\")]);
+        let root = std::path::PathBuf::from("volume-c");
+        let folder = root.join("folder");
+        let file = folder.join("sample.bin");
+        let mut nodes = pending_tree(&[root.clone(), std::path::PathBuf::from("volume-d")]);
         let mut paths = std::collections::HashMap::new();
         let mut pending = Vec::new();
         let root_index = install_scanned_entries(
@@ -1389,7 +1390,6 @@ mod tests {
             }],
         );
         assert_eq!(root_index, [1]);
-        let folder = root.join("folder");
         let file_index = install_scanned_entries(
             &mut nodes,
             1,
@@ -1430,8 +1430,8 @@ mod tests {
                     atime: None,
                     mtime: None,
                     children: vec![],
-                    tag: core::classify::Tag::Personal,
-                    reason: None,
+                    tag: core::classify::Tag::Junk,
+                    reason: Some("Rebuilds automatically".into()),
                     category: core::categories::Category::Other,
                 },
             }],
@@ -1443,6 +1443,7 @@ mod tests {
         assert_eq!(nodes[3].path, folder);
         assert_eq!(nodes[3].children, [4]);
         assert_eq!(nodes[4].path, file);
+        assert_eq!(nodes[4].tag, core::classify::Tag::Junk);
         assert_eq!(nodes[0].children, [1, 2]);
         let mut ready = std::collections::HashSet::new();
         assert!(!ready_to_clean(&nodes, 4, &ready));

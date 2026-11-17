@@ -11,7 +11,7 @@ pub fn print_table(nodes: &[Node]) {
         "PATH", "SIZE", "FILES", "TAG"
     );
     println!("{}", "─".repeat(94));
-    for n in nodes.iter().filter(|n| n.size > 0) {
+    for n in nodes {
         println!(
             "{:<40} {:>12} {:>10}  {:<8} {:?}",
             n.path

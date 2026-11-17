@@ -4,9 +4,14 @@ use super::{
 };
 
 pub fn clean(node: &Node, dry_run: bool) -> Result<String, Box<dyn std::error::Error>> {
-    let path = node.path.to_string_lossy();
+    let canonical = if dry_run {
+        std::fs::canonicalize(&node.path).unwrap_or_else(|_| node.path.clone())
+    } else {
+        std::fs::canonicalize(&node.path)?
+    };
+    let path = canonical.to_string_lossy();
     if node.tag == Tag::System
-        || classify::is_system_area(&node.path)
+        || classify::is_system_area(&canonical)
         || path == "/"
         || (cfg!(windows) && path.len() <= 3)
     {

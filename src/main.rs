@@ -8,9 +8,9 @@ use std::path::PathBuf;
 #[derive(Parser)]
 #[command(name = "sweep", version, about = "Find what is using your disks")]
 struct Args {
-    #[arg(long, value_name = "PATH", num_args = 1.., action = clap::ArgAction::Append, help = "Scan one or more paths instead of discovering mounted disks")]
+    #[arg(long, value_name = "PATH", num_args = 1.., action = clap::ArgAction::Append, conflicts_with = "demo", help = "Scan one or more directories instead of discovering mounted disks")]
     path: Vec<PathBuf>,
-    #[arg(long)]
+    #[arg(long, conflicts_with_all = ["plain", "json"])]
     dry_run: bool,
     #[arg(long)]
     demo: bool,

@@ -4,7 +4,7 @@ use crate::{
     ui::{bar, store::Store},
 };
 use crossterm::{
-    event::{self, Event, KeyCode},
+    event::{self, Event, KeyCode, KeyEventKind},
     execute,
     terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
 };
@@ -37,6 +37,9 @@ pub fn run(nodes: &mut Vec<Node>, dry: bool, demo: bool) -> Result<(), Box<dyn s
         let (junk, unused) = junk_unused;
         terminal.draw(|f| draw(f, nodes, &s, total, used, free, junk, unused))?;
         if let Event::Key(k) = event::read()? {
+            if k.kind != KeyEventKind::Press {
+                continue;
+            }
             let children = core::browse::sorted_children(nodes, s.current);
             let shown: Vec<_> = children
                 .into_iter()

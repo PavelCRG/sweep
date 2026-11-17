@@ -7,7 +7,19 @@ fn date(t: std::io::Result<SystemTime>) -> Option<DateTime<Utc>> {
 }
 
 pub fn scan_many(roots: &[std::path::PathBuf]) -> std::io::Result<Vec<Node>> {
-    let mut roots = roots.to_vec();
+    let mut roots: Vec<_> = roots
+        .iter()
+        .map(fs::canonicalize)
+        .collect::<std::io::Result<_>>()?;
+    if roots.is_empty() {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "at least one scan directory is required",
+        ));
+    }
+    for root in &mut roots {
+        *root = displayable_path(std::mem::take(root));
+    }
     roots.sort();
     roots.dedup();
     if roots.len() == 1 {
@@ -49,6 +61,12 @@ pub fn scan_many(roots: &[std::path::PathBuf]) -> std::io::Result<Vec<Node>> {
 
 fn scan_excluding(root: &Path, excluded: &[std::path::PathBuf]) -> std::io::Result<Vec<Node>> {
     let root_meta = fs::metadata(root)?;
+    if !root_meta.is_dir() {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            format!("scan path is not a directory: {}", root.display()),
+        ));
+    }
     let root_name = root
         .file_name()
         .unwrap_or(root.as_os_str())
@@ -157,4 +175,17 @@ fn scan_excluding(root: &Path, excluded: &[std::path::PathBuf]) -> std::io::Resu
         nodes[p].files = nodes[p].files.saturating_add(nodes[i].files);
     }
     Ok(nodes)
+}
+
+fn displayable_path(path: std::path::PathBuf) -> std::path::PathBuf {
+    let Some(path) = path.to_str() else {
+        return path;
+    };
+    if let Some(unc) = path.strip_prefix(r"\\?\UNC\") {
+        std::path::PathBuf::from(format!(r"\\{unc}"))
+    } else if let Some(path) = path.strip_prefix(r"\\?\") {
+        std::path::PathBuf::from(path)
+    } else {
+        std::path::PathBuf::from(path)
+    }
 }

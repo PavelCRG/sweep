@@ -22,6 +22,14 @@ struct Args {
     dry_run: bool,
     #[arg(long)]
     demo: bool,
+    #[arg(
+        long,
+        value_enum,
+        value_name = "LANG",
+        conflicts_with_all = ["plain", "json", "csv", "compare", "check_updates"],
+        help = "TUI language (en or ru)"
+    )]
+    lang: Option<ui::lang::Language>,
     #[arg(long, conflicts_with_all = ["json", "csv", "compare"])]
     plain: bool,
     #[arg(long, conflicts_with_all = ["plain", "csv", "compare"])]
@@ -105,7 +113,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     } else if args.json {
         plain::print_json(&tree)?;
     } else {
-        ui::app::run(&mut tree, args.dry_run || args.demo, args.demo, cancelled)?;
+        ui::app::run(
+            &mut tree,
+            args.dry_run || args.demo,
+            args.demo,
+            args.lang.unwrap_or_default(),
+            cancelled,
+        )?;
     }
     Ok(())
 }
@@ -163,5 +177,12 @@ mod tests {
         assert!(Args::try_parse_from(["sweep", "--dry-run", "--json"]).is_err());
         assert!(Args::try_parse_from(["sweep", "--plain", "--csv"]).is_err());
         assert!(Args::try_parse_from(["sweep", "--check-updates", "--path", "src"]).is_err());
+        assert!(Args::try_parse_from(["sweep", "--plain", "--lang", "ru"]).is_err());
+        assert!(Args::try_parse_from(["sweep", "--check-updates", "--lang", "ru"]).is_err());
+    }
+
+    #[test]
+    fn cli_accepts_the_russian_interface_language() {
+        assert!(Args::try_parse_from(["sweep", "--lang", "ru"]).is_ok());
     }
 }

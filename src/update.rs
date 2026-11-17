@@ -78,12 +78,12 @@ mod tests {
     #[test]
     fn accepts_release_tags_with_or_without_v_prefix() {
         let release = parse_release(
-            r#"{"tag_name":"v0.2.0","html_url":"https://github.com/PavelCRG/sweep/releases/tag/v0.2.0","draft":false,"prerelease":false}"#,
+            r#"{"tag_name":"v0.1.1","html_url":"https://github.com/PavelCRG/sweep/releases/tag/v0.1.1","draft":false,"prerelease":false}"#,
         )
         .unwrap();
-        assert_eq!(release.version, "0.2.0");
+        assert_eq!(release.version, "0.1.1");
         assert!(update_available("0.1.0", &release).unwrap());
-        assert!(!update_available("0.2.0", &release).unwrap());
+        assert!(!update_available("0.1.1", &release).unwrap());
     }
 
     #[test]

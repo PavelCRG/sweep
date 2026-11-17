@@ -4,8 +4,8 @@ use std::path::PathBuf;
 
 pub fn tree() -> Vec<Node> {
     let mut nodes = vec![Node {
-        path: PathBuf::from("/home/demo"),
-        name: "demo".into(),
+        path: PathBuf::from("demo"),
+        name: "All disks".into(),
         size: 0,
         files: 0,
         directory: true,
@@ -16,9 +16,29 @@ pub fn tree() -> Vec<Node> {
         reason: None,
         category: Category::Other,
     }];
-    let projects = add(
+    let system = add(
         &mut nodes,
         0,
+        "System volume",
+        true,
+        0,
+        Tag::Personal,
+        None,
+        Category::Other,
+    );
+    let media = add(
+        &mut nodes,
+        0,
+        "Media volume",
+        true,
+        0,
+        Tag::Personal,
+        None,
+        Category::Other,
+    );
+    let projects = add(
+        &mut nodes,
+        system,
         "Projects",
         true,
         0,
@@ -119,7 +139,7 @@ pub fn tree() -> Vec<Node> {
 
     let modules = add(
         &mut nodes,
-        0,
+        system,
         "node_modules",
         true,
         0,
@@ -146,7 +166,7 @@ pub fn tree() -> Vec<Node> {
 
     let downloads = add(
         &mut nodes,
-        0,
+        system,
         "Downloads",
         true,
         0,
@@ -237,7 +257,7 @@ pub fn tree() -> Vec<Node> {
 
     let movies = add(
         &mut nodes,
-        0,
+        media,
         "Movies",
         true,
         0,
@@ -318,7 +338,7 @@ pub fn tree() -> Vec<Node> {
 
     let cache = add(
         &mut nodes,
-        0,
+        system,
         ".cache",
         true,
         0,
@@ -353,6 +373,22 @@ pub fn tree() -> Vec<Node> {
         nodes[parent].files = nodes[parent].files.saturating_add(nodes[i].files);
     }
     nodes
+}
+
+#[cfg(test)]
+mod tests {
+    use super::tree;
+
+    #[test]
+    fn demo_presents_multiple_independent_volumes() {
+        let nodes = tree();
+        let volumes: Vec<_> = nodes[0]
+            .children
+            .iter()
+            .map(|&i| nodes[i].name.as_str())
+            .collect();
+        assert_eq!(volumes, ["System volume", "Media volume"]);
+    }
 }
 
 fn add(

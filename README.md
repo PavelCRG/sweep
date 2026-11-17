@@ -7,7 +7,7 @@
 Fast, keyboard-first disk space analysis for Windows and Linux.
 
 [![CI](https://github.com/PavelCRG/sweep/actions/workflows/ci.yml/badge.svg)](https://github.com/PavelCRG/sweep/actions/workflows/ci.yml)
-[![Release](https://img.shields.io/badge/release-v0.1.0-22d3ee)](https://github.com/PavelCRG/sweep/releases/tag/v0.1.0)
+[![Release](https://img.shields.io/badge/release-v0.1.1-22d3ee)](https://github.com/PavelCRG/sweep/releases/tag/v0.1.1)
 [![Windows · Linux](https://img.shields.io/badge/platform-Windows%20%7C%20Linux-64748b)](#install)
 
 </div>
@@ -16,11 +16,11 @@ Fast, keyboard-first disk space analysis for Windows and Linux.
   <img src="assets/sweep-demo.png" alt="Sweep disk analyzer showing a demo drive, largest folders, junk labels, and item details" width="100%">
 </p>
 
-Sweep scans mounted disks or selected folders, makes the biggest space users easy to find, and sends reviewed items to your system Trash. The demo mode shows the full interface without touching your files.
+Sweep opens with an overview of every scanned volume, shows each disk's own capacity, and makes the largest folders easy to spot. Review items and move them to your system Trash. The demo mode includes two virtual disks and never touches your files.
 
 ## Install
 
-Download the archive for your system from the [v0.1.0 release](https://github.com/PavelCRG/sweep/releases/tag/v0.1.0), extract it, and run `sweep` (or `sweep.exe` on Windows). Each release includes a SHA-256 checksum file.
+Download the archive for your system from the [v0.1.1 release](https://github.com/PavelCRG/sweep/releases/tag/v0.1.1), extract it, and run `sweep` (or `sweep.exe` on Windows). Each release includes a SHA-256 checksum file.
 
 Or build the standalone binary from source with Rust installed:
 
@@ -36,7 +36,8 @@ The binary is at `target/release/sweep` on Linux and `target/release/sweep.exe` 
 sweep                         # scan mounted disks and open the TUI
 sweep --path ~/Projects       # scan a folder
 sweep --path C:\Users\Pavel  # scan a Windows folder
-sweep --demo                  # explore a safe virtual disk
+sweep --demo                  # explore two safe virtual disks
+sweep --lang ru               # start the TUI in Russian (l switches languages)
 sweep --plain                 # print a readable report
 sweep --json > before.json    # save a snapshot
 sweep --compare before.json   # compare a new scan with that snapshot
@@ -55,6 +56,7 @@ Scans and reports run locally. Sweep connects to GitHub only when you explicitly
 | `Esc` / `←` | Go up; cancel a rescan |
 | `g` | Jump into the largest space-using child |
 | `f` | Show everything or only Junk and Unused |
+| `l` | Switch between English and Russian |
 | `d` twice | Move the selected item to Trash |
 | `r` | Rescan the selected disks |
 | `Tab` | Switch panel focus |
@@ -78,7 +80,9 @@ cargo test --locked
 cargo build --release --locked
 ```
 
-GitHub Actions checks Windows and Linux builds. Version tags such as `v0.1.0` produce standalone archives and SHA-256 checksums.
+GitHub Actions checks Windows and Linux builds. Version tags such as `v0.1.1` produce standalone archives and SHA-256 checksums.
+
+The TUI starts in English; use `--lang ru` to start in Russian or press `l` to switch while browsing.
 
 ## Project
 

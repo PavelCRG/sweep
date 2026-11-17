@@ -1,65 +1,76 @@
+<div align="center">
+
 # sweep
 
-### Find what's filling your disks. Review it. Clean it safely.
+### See what is filling your disks. Clean up with confidence.
+
+Fast, keyboard-first disk space analysis for Windows and Linux.
 
 [![CI](https://github.com/PavelCRG/sweep/actions/workflows/ci.yml/badge.svg)](https://github.com/PavelCRG/sweep/actions/workflows/ci.yml)
-[![Rust](https://img.shields.io/badge/Rust-Windows%20%7C%20Linux-orange?logo=rust)](https://github.com/PavelCRG/sweep)
+[![Release](https://img.shields.io/badge/release-v0.1.0-22d3ee)](https://github.com/PavelCRG/sweep/releases/tag/v0.1.0)
+[![Windows · Linux](https://img.shields.io/badge/platform-Windows%20%7C%20Linux-64748b)](#install)
 
-**sweep** is a fast, keyboard-first disk analyzer for Windows and Linux. It scans mounted disks or selected folders, shows where space is going, and moves reviewed items to the system Trash.
+</div>
+
+<p align="center">
+  <img src="assets/sweep-demo.png" alt="Sweep disk analyzer showing a demo drive, largest folders, junk labels, and item details" width="100%">
+</p>
+
+Sweep scans mounted disks or selected folders, makes the biggest space users easy to find, and sends reviewed items to your system Trash. The demo mode shows the full interface without touching your files.
 
 ## Install
 
-Download the Windows or Linux archive from [GitHub Releases](https://github.com/PavelCRG/sweep/releases/latest), extract it, and run `sweep` (`sweep.exe` on Windows). Releases include SHA-256 checksums.
+Download the archive for your system from the [v0.1.0 release](https://github.com/PavelCRG/sweep/releases/tag/v0.1.0), extract it, and run `sweep` (or `sweep.exe` on Windows). Each release includes a SHA-256 checksum file.
 
-To build from source, install Rust and run:
+Or build the standalone binary from source with Rust installed:
 
 ```sh
 cargo build --release --locked
 ```
 
-The standalone executable is `target/release/sweep` on Linux and `target/release/sweep.exe` on Windows.
+The binary is at `target/release/sweep` on Linux and `target/release/sweep.exe` on Windows.
 
-## Start here
+## Quick start
 
 ```sh
-sweep                              # scan mounted disks and open the TUI
-sweep --path ~/Projects            # scan one folder
-sweep --path C:\Users\Pavel D:\   # scan selected Windows paths
-sweep --demo                       # explore a virtual disk safely
-sweep --plain                      # print a readable report
-sweep --json > before.json         # save a JSON snapshot
-sweep --compare before.json        # compare this scan with the snapshot
-sweep --csv > report.csv           # export a spreadsheet-friendly report
-sweep --check-updates              # check GitHub Releases on request
+sweep                         # scan mounted disks and open the TUI
+sweep --path ~/Projects       # scan a folder
+sweep --path C:\Users\Pavel  # scan a Windows folder
+sweep --demo                  # explore a safe virtual disk
+sweep --plain                 # print a readable report
+sweep --json > before.json    # save a snapshot
+sweep --compare before.json   # compare a new scan with that snapshot
+sweep --csv > report.csv      # export a spreadsheet-friendly report
+sweep --check-updates         # check for a release when you choose
 ```
 
-Use `sweep --help` for the full command list. Scanning works locally. Only `--check-updates` connects to GitHub; it checks the latest stable release and sends no scan results.
+Scans and reports run locally. Sweep connects to GitHub only when you explicitly run `--check-updates`; no scan data is sent.
 
-## TUI controls
+## Explore the TUI
 
 | Key | Action |
 | --- | --- |
-| `↑` / `↓`, `j` / `k` | Move through folders and files |
+| `↑` / `↓` or `j` / `k` | Move through the list |
 | `Enter` / `→` | Open a folder or disk |
-| `Esc` / `←` | Go up; cancel a running rescan with `Esc` |
+| `Esc` / `←` | Go up; cancel a rescan |
 | `g` | Jump into the largest space-using child |
-| `f` | Filter to Junk and Unused items |
+| `f` | Show everything or only Junk and Unused |
 | `d` twice | Move the selected item to Trash |
-| `r` | Rescan the selected disks; progress and skipped entries are shown |
+| `r` | Rescan the selected disks |
 | `Tab` | Switch panel focus |
 | `q` | Quit |
 
-Press `Ctrl+C` to cancel the initial scan. Unreadable or locked entries are skipped and counted; they are never treated as zero-byte files in cleanup recommendations.
+`Ctrl+C` cancels the initial scan. Unreadable or locked entries are skipped and counted.
 
 ## Safe cleanup
 
-Sweep explains each `JUNK`, `UNUSED`, and `SYSTEM` label. Review the item and its size before pressing `d` twice. Selected items go to the operating system's Trash, and protected system paths are blocked. Use `--dry-run` to preview the action without moving anything.
+Sweep explains its `JUNK`, `UNUSED`, and `SYSTEM` labels. Review the item and its size, then press `d` twice to move it to the operating system's Trash. Protected system paths are blocked. Use `--dry-run` to preview cleanup without changing files; `--demo` is always non-destructive.
 
 ## Reports
 
-JSON snapshots can be saved with normal shell redirection and compared later with `--compare`. Comparison matches paths and reports size changes, including files or folders added or removed. CSV includes paths, sizes in bytes, tags, categories, and the reason for each label.
+JSON snapshots can be compared later with `--compare`. Comparisons match paths and show size changes, including added and removed files. CSV exports include paths, sizes, tags, categories, and label reasons.
 
-## Development
+## Build and verify
 
 ```sh
 cargo fmt --all -- --check
@@ -67,8 +78,8 @@ cargo test --locked
 cargo build --release --locked
 ```
 
-GitHub Actions runs formatting, tests, and release builds on Windows and Linux for changes to `main`. Pushing a version tag such as `v0.2.0` builds both standalone archives, adds SHA-256 checksums, and publishes a GitHub Release.
+GitHub Actions checks Windows and Linux builds. Version tags such as `v0.1.0` produce standalone archives and SHA-256 checksums.
 
 ## Project
 
-Maintained by [PavelCRG](https://github.com/PavelCRG). Issues and contributions are welcome.
+Created and maintained by [PavelCRG](https://github.com/PavelCRG). Bug reports and contributions are welcome in [Issues](https://github.com/PavelCRG/sweep/issues).

@@ -7,10 +7,10 @@ pub mod scan;
 pub mod volumes;
 
 use chrono::{DateTime, Utc};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Node {
     pub path: PathBuf,
     pub name: String,

@@ -1,13 +1,13 @@
 [package]
 name = "sweep"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2021"
 
 [dependencies]
 clap = { version = "4", features = ["derive"] }
 jwalk = "0.8"
-ratatui = "0.29"
-crossterm = "0.27"
+ratatui = "0.30.2"
+crossterm = "0.29"
 trash = "5"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
@@ -15,6 +15,9 @@ chrono = { version = "0.4", features = ["serde"] }
 unicode-width = "0.1"
 fs2 = "0.4"
 sysinfo = { version = "0.30.13", default-features = false }
+ctrlc = "3.5.2"
+ureq = { version = "3.5.2", default-features = false, features = ["rustls"] }
+semver = "1"
 
 [profile.release]
 lto = true

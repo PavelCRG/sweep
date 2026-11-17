@@ -9,7 +9,16 @@ use crossterm::{
     terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
 };
 use ratatui::{prelude::*, widgets::*};
-use std::io;
+use std::{
+    io,
+    sync::mpsc::{self, Receiver},
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc,
+    },
+    thread,
+    time::Duration,
+};
 use unicode_width::UnicodeWidthChar;
 
 struct TerminalGuard;
@@ -20,14 +29,57 @@ impl Drop for TerminalGuard {
     }
 }
 
-pub fn run(nodes: &mut Vec<Node>, dry: bool, demo: bool) -> Result<(), Box<dyn std::error::Error>> {
+pub fn run(
+    nodes: &mut Vec<Node>,
+    dry: bool,
+    demo: bool,
+    cancelled: Arc<AtomicBool>,
+) -> Result<(), Box<dyn std::error::Error>> {
     enable_raw_mode()?;
     execute!(io::stdout(), EnterAlternateScreen)?;
     let _guard = TerminalGuard;
     let mut terminal = Terminal::new(CrosstermBackend::new(io::stdout()))?;
     let mut s = Store::new(nodes);
     let mut junk_unused = classified_sizes(nodes, 0);
+    let mut scan: Option<ScanJob> = None;
     loop {
+        let mut scan_finished = false;
+        if let Some(job) = &scan {
+            let updates: Vec<_> = job.updates.try_iter().collect();
+            let mut finished = None;
+            for update in updates {
+                match update {
+                    ScanUpdate::Progress(count) => {
+                        s.status = format!(
+                            "Rescanning… {} items · {} skipped · Esc cancels",
+                            count.visited, count.skipped
+                        );
+                    }
+                    ScanUpdate::Finished(result) => finished = Some(result),
+                }
+            }
+            if let Some(result) = finished {
+                scan = None;
+                scan_finished = true;
+                match result {
+                    Ok(updated) => {
+                        *nodes = updated;
+                        s.current = 0;
+                        s.selected = 0;
+                        s.status = "Scan refreshed".into();
+                        junk_unused = classified_sizes(nodes, 0);
+                    }
+                    Err(e) if e.kind() == std::io::ErrorKind::Interrupted => {
+                        cancelled.store(false, Ordering::Relaxed);
+                        s.status = "Scan cancelled".into();
+                    }
+                    Err(e) => s.status = format!("Rescan failed: {e}"),
+                }
+            }
+        }
+        if scan_finished {
+            continue;
+        }
         let (total, free) = if demo {
             (300_000_000_000, 44_000_000_000)
         } else {
@@ -36,8 +88,24 @@ pub fn run(nodes: &mut Vec<Node>, dry: bool, demo: bool) -> Result<(), Box<dyn s
         let used = total.saturating_sub(free);
         let (junk, unused) = junk_unused;
         terminal.draw(|f| draw(f, nodes, &s, total, used, free, junk, unused))?;
+        if scan.is_some() && !event::poll(Duration::from_millis(100))? {
+            continue;
+        }
         if let Event::Key(k) = event::read()? {
             if k.kind != KeyEventKind::Press {
+                continue;
+            }
+            if let Some(job) = &scan {
+                if k.code == KeyCode::Esc
+                    || (k.code == KeyCode::Char('c')
+                        && k.modifiers.contains(event::KeyModifiers::CONTROL))
+                {
+                    job.cancelled.store(true, Ordering::Relaxed);
+                    s.status = "Cancelling scan…".into();
+                } else if k.code == KeyCode::Char('q') {
+                    job.cancelled.store(true, Ordering::Relaxed);
+                    break;
+                }
                 continue;
             }
             let children = core::browse::sorted_children(nodes, s.current);
@@ -53,6 +121,7 @@ pub fn run(nodes: &mut Vec<Node>, dry: bool, demo: bool) -> Result<(), Box<dyn s
                 .collect();
             match k.code {
                 KeyCode::Char('q') => break,
+                KeyCode::Char('c') if k.modifiers.contains(event::KeyModifiers::CONTROL) => break,
                 KeyCode::Down | KeyCode::Char('j') => {
                     if !shown.is_empty() {
                         s.selected = (s.selected + 1).min(shown.len() - 1);
@@ -103,16 +172,9 @@ pub fn run(nodes: &mut Vec<Node>, dry: bool, demo: bool) -> Result<(), Box<dyn s
                     } else {
                         s.confirm_delete = false;
                         let roots = scan_roots(nodes);
-                        match core::scan::scan_many(&roots) {
-                            Ok(updated) => {
-                                *nodes = updated;
-                                s.current = 0;
-                                s.selected = 0;
-                                s.status = "Scan refreshed".into();
-                                junk_unused = classified_sizes(nodes, 0);
-                            }
-                            Err(e) => s.status = format!("Rescan failed: {e}"),
-                        }
+                        cancelled.store(false, Ordering::Relaxed);
+                        scan = Some(start_scan(roots, Arc::clone(&cancelled)));
+                        s.status = "Rescanning…  Esc cancels".into();
                     }
                 }
                 KeyCode::Tab => s.focus_right = !s.focus_right,
@@ -126,7 +188,16 @@ pub fn run(nodes: &mut Vec<Node>, dry: bool, demo: bool) -> Result<(), Box<dyn s
                             s.status = "Press d again to move this item to Trash".into();
                         } else {
                             match core::clean::clean(&nodes[i], dry) {
-                                Ok(m) => s.status = m,
+                                Ok(m) => {
+                                    s.status = m;
+                                    if !dry {
+                                        cancelled.store(false, Ordering::Relaxed);
+                                        scan = Some(start_scan(
+                                            scan_roots(nodes),
+                                            Arc::clone(&cancelled),
+                                        ));
+                                    }
+                                }
                                 Err(e) => s.status = e.to_string(),
                             }
                             s.confirm_delete = false;
@@ -137,7 +208,35 @@ pub fn run(nodes: &mut Vec<Node>, dry: bool, demo: bool) -> Result<(), Box<dyn s
             }
         }
     }
+    if let Some(job) = scan {
+        job.cancelled.store(true, Ordering::Relaxed);
+    }
     Ok(())
+}
+
+enum ScanUpdate {
+    Progress(core::scan::ScanProgress),
+    Finished(std::io::Result<Vec<Node>>),
+}
+
+struct ScanJob {
+    updates: Receiver<ScanUpdate>,
+    cancelled: Arc<AtomicBool>,
+}
+
+fn start_scan(roots: Vec<std::path::PathBuf>, cancelled: Arc<AtomicBool>) -> ScanJob {
+    let (updates_tx, updates) = mpsc::channel();
+    let progress_tx = updates_tx.clone();
+    let worker_cancelled = Arc::clone(&cancelled);
+    thread::spawn(move || {
+        let result = core::scan::scan_many_with_progress(&roots, &worker_cancelled, |count| {
+            if count.visited % 500 == 0 {
+                let _ = progress_tx.send(ScanUpdate::Progress(count));
+            }
+        });
+        let _ = updates_tx.send(ScanUpdate::Finished(result));
+    });
+    ScanJob { updates, cancelled }
 }
 
 fn scan_roots(nodes: &[Node]) -> Vec<std::path::PathBuf> {
@@ -239,12 +338,12 @@ fn draw(
             };
             let name_width = if compact { 12 } else { 20 };
             let width = if compact { 5 } else { 8 };
-            let filled = if nodes[s.current].size == 0 {
-                0
-            } else {
-                (n.size.saturating_mul(width as u64) / nodes[s.current].size).min(width as u64)
-                    as usize
-            };
+            let filled = n
+                .size
+                .saturating_mul(width as u64)
+                .checked_div(nodes[s.current].size)
+                .unwrap_or(0)
+                .min(width as u64) as usize;
             let size_bar = format!(
                 "{}{}",
                 "\u{2588}".repeat(filled),

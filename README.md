@@ -1,74 +1,74 @@
 # sweep
 
-### Know what is filling your disks. Clean up with confidence.
+### Find what's filling your disks. Review it. Clean it safely.
 
-**sweep** is an offline-first disk analyzer for Windows and Linux, built by [PavelCRG](https://github.com/PavelCRG). It maps large folders, points to the real space hog, explains what looks safe to remove, and sends selected items to the system Trash.
+[![CI](https://github.com/PavelCRG/sweep/actions/workflows/ci.yml/badge.svg)](https://github.com/PavelCRG/sweep/actions/workflows/ci.yml)
+[![Rust](https://img.shields.io/badge/Rust-Windows%20%7C%20Linux-orange?logo=rust)](https://github.com/PavelCRG/sweep)
 
-One command opens an interactive, keyboard-first view. No account, telemetry, or network connection is needed at runtime.
+**sweep** is a fast, keyboard-first disk analyzer for Windows and Linux. It scans mounted disks or selected folders, shows where space is going, and moves reviewed items to the system Trash.
 
-```text
-  SWEEP | DISK MAP
-  [#########...] Personal   [##.........] Junk   [###........] Unused   Free
-  > Projects       [#######.]  42.1 GB   mostly in app/target
-    Downloads      [###.....]   8.4 GB   INSTALLER
-```
+## Install
 
-## What it does
+Download the Windows or Linux archive from [GitHub Releases](https://github.com/PavelCRG/sweep/releases/latest), extract it, and run `sweep` (`sweep.exe` on Windows). Releases include SHA-256 checksums.
 
-- **Finds the big stuff.** A parallel scan follows each folder's largest child to show where the space actually went.
-- **Works across volumes.** The default scan discovers mounted disks; use `--path` to scan specific folders or several paths together.
-- **Explains its labels.** `JUNK`, `UNUSED`, and `SYSTEM` come with a reason in the details panel.
-- **Cleans safely.** Selected items go to the operating system's Trash. Press `d` twice to confirm; `--dry-run` shows what would happen without changing files.
-- **Stays local.** Scans and reports run on your computer. The app does not need internet access.
-- **Includes a safe demo.** Explore a realistic virtual 256 GB disk without touching real files.
-
-## Get started
-
-Build a standalone release binary with Rust installed:
+To build from source, install Rust and run:
 
 ```sh
-cargo build --release
+cargo build --release --locked
 ```
 
-The executable is `target/release/sweep` on Linux and `target/release/sweep.exe` on Windows.
+The standalone executable is `target/release/sweep` on Linux and `target/release/sweep.exe` on Windows.
+
+## Start here
 
 ```sh
-sweep                         # discover and scan mounted disks
-sweep --path ~/Projects       # scan one directory
-sweep --path C:\ --path D:\  # scan two Windows volumes
-sweep --demo                  # browse the virtual disk
-sweep --dry-run               # run the TUI without moving files
-sweep --plain                 # print a text report
-sweep --json                  # print structured JSON
+sweep                              # scan mounted disks and open the TUI
+sweep --path ~/Projects            # scan one folder
+sweep --path C:\Users\Pavel D:\   # scan selected Windows paths
+sweep --demo                       # explore a virtual disk safely
+sweep --plain                      # print a readable report
+sweep --json > before.json         # save a JSON snapshot
+sweep --compare before.json        # compare this scan with the snapshot
+sweep --csv > report.csv           # export a spreadsheet-friendly report
+sweep --check-updates              # check GitHub Releases on request
 ```
 
-Use `sweep --help` to see all options. `--plain` and `--json` scan the discovered volumes too; pass `--path` to limit the report.
+Use `sweep --help` for the full command list. Scanning works locally. Only `--check-updates` connects to GitHub; it checks the latest stable release and sends no scan results.
 
-## In the TUI
+## TUI controls
 
 | Key | Action |
 | --- | --- |
-| `Up` / `Down`, `j` / `k` | Move through the list |
-| `Enter` / `Right` | Open a folder or volume |
-| `Esc` / `Left` | Go up one level |
-| `g` | Jump to the largest culprit inside the selected folder |
-| `f` | Show only Junk and Unused items |
+| `↑` / `↓`, `j` / `k` | Move through folders and files |
+| `Enter` / `→` | Open a folder or disk |
+| `Esc` / `←` | Go up; cancel a running rescan with `Esc` |
+| `g` | Jump into the largest space-using child |
+| `f` | Filter to Junk and Unused items |
 | `d` twice | Move the selected item to Trash |
-| `r` | Rescan all selected volumes |
-| `Tab` | Highlight the other pane |
+| `r` | Rescan the selected disks; progress and skipped entries are shown |
+| `Tab` | Switch panel focus |
 | `q` | Quit |
 
-## Labels
+Press `Ctrl+C` to cancel the initial scan. Unreadable or locked entries are skipped and counted; they are never treated as zero-byte files in cleanup recommendations.
 
-| Label | Meaning |
-| --- | --- |
-| `JUNK` | Rebuildable caches and build output, plus old installers in Downloads |
-| `UNUSED` | Items with both access and modification dates older than six months |
-| `SYSTEM` | OS-managed paths that sweep blocks from deletion |
-| `PERSONAL` | Everything else; review it before removing |
+## Safe cleanup
 
-These labels are suggestions to guide review. Sweep never permanently deletes a selected item; the operating system's Trash gives you a chance to restore it.
+Sweep explains each `JUNK`, `UNUSED`, and `SYSTEM` label. Review the item and its size before pressing `d` twice. Selected items go to the operating system's Trash, and protected system paths are blocked. Use `--dry-run` to preview the action without moving anything.
+
+## Reports
+
+JSON snapshots can be saved with normal shell redirection and compared later with `--compare`. Comparison matches paths and reports size changes, including files or folders added or removed. CSV includes paths, sizes in bytes, tags, categories, and the reason for each label.
+
+## Development
+
+```sh
+cargo fmt --all -- --check
+cargo test --locked
+cargo build --release --locked
+```
+
+GitHub Actions runs formatting, tests, and release builds on Windows and Linux for changes to `main`. Pushing a version tag such as `v0.2.0` builds both standalone archives, adds SHA-256 checksums, and publishes a GitHub Release.
 
 ## Project
 
-The project is maintained by [PavelCRG](https://github.com/PavelCRG). Issues and contributions are welcome.
+Maintained by [PavelCRG](https://github.com/PavelCRG). Issues and contributions are welcome.

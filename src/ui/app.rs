@@ -223,6 +223,24 @@ pub fn run(
                         }
                         KeyCode::Tab => s.focus_right = !s.focus_right,
                         KeyCode::Char('l') => s.lang.toggle(),
+                        KeyCode::Char('a') => {
+                            s.largest_files = !s.largest_files;
+                            s.junk_only = false;
+                            s.only_junk = false;
+                            s.selected = 0;
+                        }
+                        KeyCode::Char('c') => {
+                            s.junk_only = !s.junk_only;
+                            s.largest_files = false;
+                            s.only_junk = false;
+                            s.selected = 0;
+                        }
+                        KeyCode::Char('f') => {
+                            s.only_junk = !s.only_junk;
+                            s.junk_only = false;
+                            s.largest_files = false;
+                            s.selected = 0;
+                        }
                         KeyCode::Enter | KeyCode::Right => {
                             let shown = visible_children(nodes, &s);
                             if let Some(&item) = shown.get(s.selected) {
@@ -330,6 +348,21 @@ pub fn run(
                 }
                 KeyCode::Char('f') => {
                     s.only_junk = !s.only_junk;
+                    s.junk_only = false;
+                    s.selected = 0;
+                    s.confirm_delete = false;
+                }
+                KeyCode::Char('c') => {
+                    s.junk_only = !s.junk_only;
+                    s.largest_files = false;
+                    s.only_junk = false;
+                    s.selected = 0;
+                    s.confirm_delete = false;
+                }
+                KeyCode::Char('a') => {
+                    s.largest_files = !s.largest_files;
+                    s.junk_only = false;
+                    s.only_junk = false;
                     s.selected = 0;
                     s.confirm_delete = false;
                 }
@@ -405,6 +438,7 @@ pub fn run(
                                         )
                                     };
                                     if !dry {
+                                        s.trashed = s.trashed.saturating_add(nodes[i].size);
                                         cancelled.store(false, Ordering::Relaxed);
                                         scan = Some(start_scan(
                                             scan_roots(nodes),
@@ -752,7 +786,7 @@ fn draw(
     scanning: bool,
 ) {
     let area = f.area();
-    let overview = s.current == 0;
+    let overview = s.current == 0 && !s.largest_files && !s.junk_only;
     let current_path = nodes[s.current].path.display().to_string();
     let title = if overview {
         s.lang.text("Disk overview", "Обзор дисков")
@@ -773,13 +807,27 @@ fn draw(
         [Constraint::Percentage(62), Constraint::Percentage(38)]
     })
     .split(layout[1]);
-    let shown: Vec<_> = core::browse::sorted_children(nodes, s.current)
-        .into_iter()
-        .filter(|&i| !s.only_junk || cleanup_candidate(nodes, i))
-        .collect();
+    let shown: Vec<_> = if s.junk_only {
+        core::browse::cleanup_candidates(nodes, s.current)
+    } else if s.largest_files {
+        core::browse::largest_files(nodes, s.current)
+    } else {
+        core::browse::sorted_children(nodes, s.current)
+    }
+    .into_iter()
+    .filter(|&i| !s.only_junk || cleanup_candidate(nodes, i))
+    .collect();
     let folders = shown.iter().filter(|&&i| nodes[i].directory).count();
     let files = shown.len() - folders;
-    let list_title = if overview {
+    let list_title = if s.largest_files {
+        format!(" {} ", s.lang.text("LARGEST FILES", "КРУПНЕЙШИЕ ФАЙЛЫ"))
+    } else if s.junk_only {
+        format!(
+            " {}  /  {}",
+            s.lang.text("CLEANUP CANDIDATES", "К ОЧИСТКЕ"),
+            shown.len()
+        )
+    } else if overview {
         format!(
             " {}  /  {} {} ",
             s.lang.text("SCAN ROOTS", "ТОЧКИ СКАНИРОВАНИЯ"),
@@ -946,13 +994,13 @@ fn draw(
         )
     } else if compact {
         s.lang.text(
-            "↑↓ move  Enter open  ← back  g largest  f filter  l lang  d Trash  q quit",
-            "↑↓ выбор  Enter открыть  ← назад  g крупное  f фильтр  l язык  d корзина  q выход",
+            "↑↓ move Enter open ← up g folder a files c clean f filter l lang d Trash q quit",
+            "↑↓ выбор Enter открыть ← назад g папка a файлы c очистка f фильтр l язык d корзина q выход",
         )
     } else {
         s.lang.text(
-            "↑↓ move   Enter open   ← up   g largest   f filter   l language   d Trash   r rescan   q quit",
-            "↑↓ выбор   Enter открыть   ← назад   g крупное   f фильтр   l язык   d корзина   r скан   q выход",
+            "↑↓ move   Enter open   ← up   g largest folder   a files   c cleanup   f filter   l language   d Trash   r rescan   q quit",
+            "↑↓ выбор   Enter открыть   ← назад   g большая папка   a файлы   c очистка   f фильтр   l язык   d корзина   r скан   q выход",
         )
     };
     f.render_widget(
@@ -975,7 +1023,11 @@ fn draw(
                     ),
                     Style::default().fg(Color::DarkGray),
                 ),
-                Span::raw("   "),
+                Span::raw(format!(
+                    "   {} {}   ",
+                    human(s.trashed),
+                    s.lang.text("sent to Trash", "в корзину")
+                )),
                 Span::styled(&s.status, Style::default().fg(Color::Yellow)),
             ]),
         ]),
@@ -1255,7 +1307,14 @@ fn cleanup_candidate(nodes: &[Node], i: usize) -> bool {
 }
 
 fn visible_children(nodes: &[Node], store: &Store) -> Vec<usize> {
-    core::browse::sorted_children(nodes, store.current)
+    let children = if store.junk_only {
+        core::browse::cleanup_candidates(nodes, store.current)
+    } else if store.largest_files {
+        core::browse::largest_files(nodes, store.current)
+    } else {
+        core::browse::sorted_children(nodes, store.current)
+    };
+    children
         .into_iter()
         .filter(|&i| !store.only_junk || cleanup_candidate(nodes, i))
         .collect()

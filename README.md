@@ -54,6 +54,8 @@ Scans and reports run locally. Sweep connects to GitHub only when you explicitly
 | `Enter` / `→` | Open a folder or disk |
 | `Esc` / `←` | Go up; cancel a rescan |
 | `g` | Jump into the largest space-using child |
+| `a` | Show the 100 largest files under the current folder or disk overview |
+| `c` | Show safe cleanup candidates such as caches and temporary folders |
 | `f` | Show everything or only Junk and Unused |
 | `l` | Switch between English and Russian |
 | `d` twice | Move the selected item to Trash |
@@ -65,7 +67,7 @@ Scans and reports run locally. Sweep connects to GitHub only when you explicitly
 
 ## Safe cleanup
 
-Sweep explains its `JUNK`, `UNUSED`, and `SYSTEM` labels. Review the item and its size, then press `d` twice to move it to the operating system's Trash. Protected system paths are blocked. Use `--dry-run` to preview cleanup without changing files; `--demo` is always non-destructive.
+Sweep explains its `JUNK`, `UNUSED`, and `SYSTEM` labels. Press `c` to list cache and temporary cleanup candidates, review each item, then press `d` twice to move it to the operating system's Trash. The TUI totals the size moved during the session; empty the operating system's Trash to reclaim disk space. Protected system paths are blocked. Use `--dry-run` to preview cleanup without changing files; `--demo` is always non-destructive.
 
 ## Reports
 

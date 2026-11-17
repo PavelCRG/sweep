@@ -215,6 +215,15 @@ fn draw(
                 )
         })
         .collect();
+    let folders = shown.iter().filter(|&&i| nodes[i].directory).count();
+    let files = shown.len() - folders;
+    let list_title = if s.only_junk {
+        format!(" JUNK + UNUSED  /  {folders} folders, {files} files ")
+    } else if nodes[s.current].name == "All disks" {
+        format!(" MOUNTED DISKS  /  {folders} volumes ")
+    } else {
+        format!(" FOLDERS  {folders}  /  FILES  {files} ")
+    };
     let items = shown
         .iter()
         .map(|&i| {
@@ -260,11 +269,7 @@ fn draw(
         .collect::<Vec<_>>();
     let border = |focused| {
         Block::default()
-            .title(if s.only_junk {
-                " FOCUS  /  JUNK + UNUSED "
-            } else {
-                " FOCUS  /  ALL FILES "
-            })
+            .title(list_title.as_str())
             .borders(Borders::ALL)
             .border_type(BorderType::Rounded)
             .border_style(if focused {
@@ -405,7 +410,7 @@ fn details(nodes: &[Node], i: usize) -> Vec<Line<'static>> {
     if cause.is_none() && !n.children.is_empty() {
         lines.push(Line::from("Largest items"));
         lines.extend(
-            core::browse::sorted_children(nodes, i)
+            core::browse::largest_children(nodes, i)
                 .into_iter()
                 .take(3)
                 .map(|child| {

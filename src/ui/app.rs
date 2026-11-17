@@ -13,7 +13,7 @@ use std::{
     io,
     sync::mpsc::{self, Receiver},
     sync::{
-        atomic::{AtomicBool, Ordering},
+        atomic::{AtomicBool, AtomicUsize, Ordering},
         Arc,
     },
     thread,
@@ -44,13 +44,23 @@ pub fn run(
     let mut terminal = Terminal::new(CrosstermBackend::new(io::stdout()))?;
     let mut s = Store::new(nodes, lang);
     let mut volume_usage = volume_usages(nodes, demo);
-    let mut scan = initial_roots.map(|roots| start_scan(roots, Arc::clone(&cancelled)));
+    let progressive_scan = initial_roots
+        .as_ref()
+        .is_some_and(|roots| independent_roots(roots));
+    let mut scan = initial_roots.map(|roots| {
+        if progressive_scan {
+            start_initial_scan(roots, Arc::clone(&cancelled))
+        } else {
+            start_scan(roots, Arc::clone(&cancelled))
+        }
+    });
+    let mut ready_roots = std::collections::HashSet::new();
     if scan.is_some() {
         s.status = s
             .lang
             .text(
-                "Scanning drives in the background · folders appear when ready",
-                "Диски сканируются · папки появятся по завершении",
+                "Scanning drives · browse each disk as soon as it is ready",
+                "Идёт сканирование · открывайте диск, как только он будет готов",
             )
             .into();
     }
@@ -71,6 +81,46 @@ pub fn run(
                             s.lang.text("cancels", "отмена")
                         );
                     }
+                    ScanUpdate::RootProgress(path, count) => {
+                        s.status = format!(
+                            "{} {} · {} {} · {}",
+                            s.lang.text("Scanning", "Сканируется"),
+                            path.display(),
+                            count.visited,
+                            s.lang.text("items", "элементов"),
+                            s.lang.text("Esc cancels", "Esc — отмена")
+                        );
+                    }
+                    ScanUpdate::RootFinished(path, result) => match result {
+                        Ok(tree) => {
+                            if let Some(root) = install_scanned_root(nodes, &path, tree) {
+                                ready_roots.insert(root);
+                                volume_usage = volume_usages(nodes, demo);
+                            }
+                        }
+                        Err(error) => {
+                            s.status = format!(
+                                "{}: {error}",
+                                s.lang.text("Scan failed", "Ошибка сканирования")
+                            );
+                        }
+                    },
+                    ScanUpdate::InitialFinished => {
+                        let was_cancelled = cancelled.swap(false, Ordering::Relaxed);
+                        s.status = format!(
+                            "{} · {}/{} {}",
+                            if was_cancelled {
+                                s.lang.text("Scan cancelled", "Сканирование отменено")
+                            } else {
+                                s.lang.text("Scan complete", "Сканирование завершено")
+                            },
+                            ready_roots.len(),
+                            nodes[0].children.len(),
+                            s.lang.text("disks ready", "дисков готово")
+                        );
+                        scan = None;
+                        scan_finished = true;
+                    }
                     ScanUpdate::Finished(result) => finished = Some(result),
                 }
             }
@@ -87,6 +137,7 @@ pub fn run(
                             .text("Scan refreshed", "Сканирование завершено")
                             .into();
                         ensure_scan_root(nodes);
+                        ready_roots = nodes[0].children.iter().copied().collect();
                         volume_usage = volume_usages(nodes, demo);
                     }
                     Err(e) if e.kind() == std::io::ErrorKind::Interrupted => {
@@ -134,41 +185,78 @@ pub fn run(
                 } else {
                     match k.code {
                         KeyCode::Down | KeyCode::Char('j') => {
-                            if s.current == 0 {
-                                let count = nodes[0].children.len();
-                                if count > 0 {
-                                    s.selected = (s.selected + 1).min(count - 1);
-                                }
+                            let shown = visible_children(nodes, &s);
+                            if !shown.is_empty() {
+                                s.selected = (s.selected + 1).min(shown.len() - 1);
                             }
                         }
                         KeyCode::Up | KeyCode::Char('k') => {
-                            if s.current == 0 {
-                                s.selected = s.selected.saturating_sub(1);
-                            }
+                            s.selected = s.selected.saturating_sub(1);
                         }
                         KeyCode::Tab => s.focus_right = !s.focus_right,
                         KeyCode::Char('l') => s.lang.toggle(),
                         KeyCode::Enter | KeyCode::Right => {
-                            if s.current == 0 {
+                            let shown = visible_children(nodes, &s);
+                            if let Some(&item) = shown.get(s.selected) {
+                                let root = if s.current == 0 {
+                                    Some(item)
+                                } else {
+                                    selected_volume(nodes, s.current)
+                                };
+                                if nodes[item].directory
+                                    && root.is_some_and(|root| ready_roots.contains(&root))
+                                {
+                                    s.current = item;
+                                    s.selected = 0;
+                                    continue;
+                                }
                                 s.status = s
                                     .lang
                                     .text(
-                                        "Folder browsing unlocks when the scan finishes",
-                                        "Папки станут доступны после завершения сканирования",
+                                        "This disk is still being scanned",
+                                        "Этот диск ещё сканируется",
                                     )
                                     .into();
                             }
+                        }
+                        KeyCode::Left if s.current != 0 => {
+                            s.current = nodes[s.current]
+                                .path
+                                .parent()
+                                .and_then(|parent| {
+                                    nodes.iter().position(|node| node.path == parent)
+                                })
+                                .unwrap_or(0);
+                            s.selected = 0;
+                        }
+                        KeyCode::Char('g') => {
+                            let shown = visible_children(nodes, &s);
+                            if let Some(&item) = shown.get(s.selected) {
+                                if let Some(culprit) = core::browse::culprit(nodes, item) {
+                                    s.current = culprit;
+                                    s.selected = 0;
+                                }
+                            }
+                        }
+                        KeyCode::Char('f') => {
+                            s.only_junk = !s.only_junk;
+                            s.selected = 0;
+                        }
+                        KeyCode::Char('d') => {
+                            s.status = s
+                                .lang
+                                .text(
+                                    "Cleanup unlocks when scanning finishes",
+                                    "Очистка станет доступна после сканирования",
+                                )
+                                .into();
                         }
                         _ => {}
                     }
                 }
                 continue;
             }
-            let children = core::browse::sorted_children(nodes, s.current);
-            let shown: Vec<_> = children
-                .into_iter()
-                .filter(|&i| !s.only_junk || cleanup_candidate(nodes, i))
-                .collect();
+            let shown = visible_children(nodes, &s);
             match k.code {
                 KeyCode::Char('q') => break,
                 KeyCode::Char('c') if k.modifiers.contains(event::KeyModifiers::CONTROL) => break,
@@ -316,6 +404,9 @@ pub fn run(
 
 enum ScanUpdate {
     Progress(core::scan::ScanProgress),
+    RootProgress(std::path::PathBuf, core::scan::ScanProgress),
+    RootFinished(std::path::PathBuf, std::io::Result<Vec<Node>>),
+    InitialFinished,
     Finished(std::io::Result<Vec<Node>>),
 }
 
@@ -341,6 +432,84 @@ fn start_scan(roots: Vec<std::path::PathBuf>, cancelled: Arc<AtomicBool>) -> Sca
         let _ = updates_tx.send(ScanUpdate::Finished(result));
     });
     ScanJob { updates, cancelled }
+}
+
+fn start_initial_scan(roots: Vec<std::path::PathBuf>, cancelled: Arc<AtomicBool>) -> ScanJob {
+    let (updates_tx, updates) = mpsc::channel();
+    let worker_cancelled = Arc::clone(&cancelled);
+    thread::spawn(move || {
+        let roots = Arc::new(roots);
+        let next_root = Arc::new(AtomicUsize::new(0));
+        let workers: Vec<_> = (0..roots.len().min(4))
+            .map(|_| {
+                let roots = Arc::clone(&roots);
+                let next_root = Arc::clone(&next_root);
+                let cancelled = Arc::clone(&worker_cancelled);
+                let updates = updates_tx.clone();
+                thread::spawn(move || loop {
+                    let index = next_root.fetch_add(1, Ordering::Relaxed);
+                    let Some(root) = roots.get(index).cloned() else {
+                        break;
+                    };
+                    let progress = updates.clone();
+                    let result = core::scan::scan_many_with_progress(
+                        std::slice::from_ref(&root),
+                        &cancelled,
+                        |count| {
+                            if count.visited % 250 == 0 {
+                                let _ =
+                                    progress.send(ScanUpdate::RootProgress(root.clone(), count));
+                            }
+                        },
+                    );
+                    let _ = updates.send(ScanUpdate::RootFinished(root, result));
+                })
+            })
+            .collect();
+        for worker in workers {
+            let _ = worker.join();
+        }
+        let _ = updates_tx.send(ScanUpdate::InitialFinished);
+    });
+    ScanJob { updates, cancelled }
+}
+
+fn independent_roots(roots: &[std::path::PathBuf]) -> bool {
+    roots.iter().enumerate().all(|(index, root)| {
+        roots
+            .iter()
+            .enumerate()
+            .all(|(other_index, other)| index == other_index || !other.starts_with(root))
+    })
+}
+
+fn install_scanned_root(
+    nodes: &mut Vec<Node>,
+    requested: &std::path::Path,
+    mut scanned: Vec<Node>,
+) -> Option<usize> {
+    if scanned.is_empty() {
+        return None;
+    }
+    let root = nodes[0]
+        .children
+        .iter()
+        .copied()
+        .find(|&i| nodes[i].path == requested)?;
+    let size = scanned[0].size;
+    let files = scanned[0].files;
+    let offset = nodes.len();
+    let remap = |index: usize| if index == 0 { root } else { offset + index - 1 };
+    for node in &mut scanned {
+        for child in &mut node.children {
+            *child = remap(*child);
+        }
+    }
+    nodes[root] = scanned[0].clone();
+    nodes.extend(scanned.into_iter().skip(1));
+    nodes[0].size = nodes[0].size.saturating_add(size);
+    nodes[0].files = nodes[0].files.saturating_add(files);
+    Some(root)
 }
 
 pub fn pending_tree(roots: &[std::path::PathBuf]) -> Vec<Node> {
@@ -987,6 +1156,13 @@ fn cleanup_candidate(nodes: &[Node], i: usize) -> bool {
         && classified_sizes(nodes, i) != (0, 0))
 }
 
+fn visible_children(nodes: &[Node], store: &Store) -> Vec<usize> {
+    core::browse::sorted_children(nodes, store.current)
+        .into_iter()
+        .filter(|&i| !store.only_junk || cleanup_candidate(nodes, i))
+        .collect()
+}
+
 fn usage_spans(usage: bar::Usage, width: usize) -> Vec<Span<'static>> {
     let amounts = [
         usage.personal,
@@ -1044,8 +1220,8 @@ fn fit(value: &str, width: usize) -> String {
 #[cfg(test)]
 mod tests {
     use super::{
-        aggregate_usage, cleanup_candidate, draw, ensure_scan_root, pending_tree, scan_roots,
-        selected_volume, volume_usages,
+        aggregate_usage, cleanup_candidate, draw, ensure_scan_root, independent_roots,
+        install_scanned_root, pending_tree, scan_roots, selected_volume, volume_usages,
     };
     use crate::{
         core,
@@ -1069,6 +1245,64 @@ mod tests {
         assert!(rendered.contains("Disk overview"), "{rendered}");
         assert!(rendered.contains("C:"), "{rendered}");
         assert!(rendered.contains("D:"), "{rendered}");
+    }
+
+    #[test]
+    fn completed_drive_becomes_browsable_while_other_drives_scan() {
+        let root = std::path::PathBuf::from("C:\\");
+        let file = std::path::PathBuf::from("C:\\sample.bin");
+        let mut nodes = pending_tree(&[root.clone(), std::path::PathBuf::from("D:\\")]);
+        let scanned = vec![
+            core::Node {
+                path: root.clone(),
+                name: "C:".into(),
+                size: 12,
+                files: 1,
+                directory: true,
+                atime: None,
+                mtime: None,
+                children: vec![1],
+                tag: core::classify::Tag::Personal,
+                reason: None,
+                category: core::categories::Category::Other,
+            },
+            core::Node {
+                path: file.clone(),
+                name: "sample.bin".into(),
+                size: 12,
+                files: 1,
+                directory: false,
+                atime: None,
+                mtime: None,
+                children: vec![],
+                tag: core::classify::Tag::Personal,
+                reason: None,
+                category: core::categories::Category::Other,
+            },
+        ];
+        let volume = install_scanned_root(&mut nodes, &root, scanned).unwrap();
+        assert_eq!(volume, 1);
+        assert_eq!(nodes[0].size, 12);
+        assert_eq!(nodes[volume].size, 12);
+        assert_eq!(nodes[volume].children, [3]);
+        assert_eq!(nodes[3].path, file);
+        assert_eq!(nodes[0].children, [1, 2]);
+    }
+
+    #[test]
+    fn overlapping_scan_roots_keep_the_deduplicating_scan_path() {
+        assert!(independent_roots(&[
+            std::path::PathBuf::from("volume-a"),
+            std::path::PathBuf::from("volume-b"),
+        ]));
+        assert!(!independent_roots(&[
+            std::path::PathBuf::from("folder"),
+            std::path::PathBuf::from("folder/subfolder"),
+        ]));
+        assert!(!independent_roots(&[
+            std::path::PathBuf::from("duplicate"),
+            std::path::PathBuf::from("duplicate"),
+        ]));
     }
 
     #[test]

@@ -97,8 +97,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     } else {
         args.path
     };
+    let interactive_scan = !args.demo && !args.plain && !args.csv && !args.json;
     let mut tree = if args.demo {
         core::demo::tree()
+    } else if interactive_scan {
+        ui::app::pending_tree(&roots)
     } else {
         match scan_with_progress(&roots, &cancelled) {
             Ok(tree) => tree,
@@ -119,6 +122,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             args.demo,
             args.lang.unwrap_or_default(),
             cancelled,
+            interactive_scan.then_some(roots),
         )?;
     }
     Ok(())

@@ -35,6 +35,7 @@ pub fn run(
     demo: bool,
     lang: Language,
     cancelled: Arc<AtomicBool>,
+    initial_roots: Option<Vec<std::path::PathBuf>>,
 ) -> Result<(), Box<dyn std::error::Error>> {
     ensure_scan_root(nodes);
     enable_raw_mode()?;
@@ -43,7 +44,16 @@ pub fn run(
     let mut terminal = Terminal::new(CrosstermBackend::new(io::stdout()))?;
     let mut s = Store::new(nodes, lang);
     let mut volume_usage = volume_usages(nodes, demo);
-    let mut scan: Option<ScanJob> = None;
+    let mut scan = initial_roots.map(|roots| start_scan(roots, Arc::clone(&cancelled)));
+    if scan.is_some() {
+        s.status = s
+            .lang
+            .text(
+                "Scanning drives in the background · folders appear when ready",
+                "Диски сканируются · папки появятся по завершении",
+            )
+            .into();
+    }
     loop {
         let mut scan_finished = false;
         if let Some(job) = &scan {
@@ -121,6 +131,36 @@ pub fn run(
                 } else if k.code == KeyCode::Char('q') {
                     job.cancelled.store(true, Ordering::Relaxed);
                     break;
+                } else {
+                    match k.code {
+                        KeyCode::Down | KeyCode::Char('j') => {
+                            if s.current == 0 {
+                                let count = nodes[0].children.len();
+                                if count > 0 {
+                                    s.selected = (s.selected + 1).min(count - 1);
+                                }
+                            }
+                        }
+                        KeyCode::Up | KeyCode::Char('k') => {
+                            if s.current == 0 {
+                                s.selected = s.selected.saturating_sub(1);
+                            }
+                        }
+                        KeyCode::Tab => s.focus_right = !s.focus_right,
+                        KeyCode::Char('l') => s.lang.toggle(),
+                        KeyCode::Enter | KeyCode::Right => {
+                            if s.current == 0 {
+                                s.status = s
+                                    .lang
+                                    .text(
+                                        "Folder browsing unlocks when the scan finishes",
+                                        "Папки станут доступны после завершения сканирования",
+                                    )
+                                    .into();
+                            }
+                        }
+                        _ => {}
+                    }
                 }
                 continue;
             }
@@ -290,7 +330,7 @@ fn start_scan(roots: Vec<std::path::PathBuf>, cancelled: Arc<AtomicBool>) -> Sca
     let worker_cancelled = Arc::clone(&cancelled);
     thread::spawn(move || {
         let result = core::scan::scan_many_with_progress(&roots, &worker_cancelled, |count| {
-            if count.visited % 500 == 0 {
+            if count.visited % 250 == 0 {
                 let _ = progress_tx.send(ScanUpdate::Progress(count));
             }
         })
@@ -301,6 +341,43 @@ fn start_scan(roots: Vec<std::path::PathBuf>, cancelled: Arc<AtomicBool>) -> Sca
         let _ = updates_tx.send(ScanUpdate::Finished(result));
     });
     ScanJob { updates, cancelled }
+}
+
+pub fn pending_tree(roots: &[std::path::PathBuf]) -> Vec<Node> {
+    let mut nodes = vec![Node {
+        path: std::path::PathBuf::from("<all disks>"),
+        name: "All disks".into(),
+        size: 0,
+        files: 0,
+        directory: true,
+        atime: None,
+        mtime: None,
+        children: (1..=roots.len()).collect(),
+        tag: core::classify::Tag::Personal,
+        reason: None,
+        category: core::categories::Category::Other,
+    }];
+    nodes.extend(roots.iter().map(|path| {
+        Node {
+            path: path.clone(),
+            name: path
+                .file_name()
+                .unwrap_or(path.as_os_str())
+                .to_string_lossy()
+                .trim_end_matches(['\\', '/'])
+                .to_owned(),
+            size: 0,
+            files: 0,
+            directory: true,
+            atime: None,
+            mtime: None,
+            children: vec![],
+            tag: core::classify::Tag::Personal,
+            reason: None,
+            category: core::categories::Category::Other,
+        }
+    }));
+    nodes
 }
 
 fn scan_roots(nodes: &[Node]) -> Vec<std::path::PathBuf> {
@@ -967,14 +1044,32 @@ fn fit(value: &str, width: usize) -> String {
 #[cfg(test)]
 mod tests {
     use super::{
-        aggregate_usage, cleanup_candidate, draw, ensure_scan_root, scan_roots, selected_volume,
-        volume_usages,
+        aggregate_usage, cleanup_candidate, draw, ensure_scan_root, pending_tree, scan_roots,
+        selected_volume, volume_usages,
     };
     use crate::{
         core,
         ui::{lang::Language, store::Store},
     };
     use ratatui::{backend::TestBackend, Terminal};
+
+    #[test]
+    fn pending_tree_shows_every_drive_before_scanning_finishes() {
+        let roots = vec![
+            std::path::PathBuf::from("C:\\"),
+            std::path::PathBuf::from("D:\\"),
+        ];
+        let nodes = pending_tree(&roots);
+        assert_eq!(nodes[0].name, "All disks");
+        assert_eq!(nodes[0].children, [1, 2]);
+        assert_eq!(nodes[1].path, roots[0]);
+        assert_eq!(nodes[2].path, roots[1]);
+        assert!(nodes[1].directory && nodes[2].directory);
+        let rendered = render_text(&nodes, Language::En);
+        assert!(rendered.contains("Disk overview"), "{rendered}");
+        assert!(rendered.contains("C:"), "{rendered}");
+        assert!(rendered.contains("D:"), "{rendered}");
+    }
 
     #[test]
     fn demo_opens_on_the_disk_overview() {

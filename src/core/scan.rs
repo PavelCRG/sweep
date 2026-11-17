@@ -270,10 +270,8 @@ where
         };
         let parent_path = if build_tree {
             nodes[parent].path.clone()
-        } else if tags.contains_key(raw_parent) {
-            raw_parent.to_path_buf()
         } else {
-            root.to_path_buf()
+            raw_parent.to_path_buf()
         };
         let name = path
             .file_name()

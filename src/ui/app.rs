@@ -69,6 +69,10 @@ pub fn run(
         std::path::PathBuf,
         std::collections::HashMap<std::path::PathBuf, usize>,
     > = std::collections::HashMap::new();
+    let mut scan_pending: std::collections::HashMap<
+        std::path::PathBuf,
+        Vec<core::scan::ScanEntry>,
+    > = std::collections::HashMap::new();
     let mut available_nodes = std::collections::HashSet::new();
     if scan.is_some() {
         s.status = s
@@ -108,9 +112,11 @@ pub fn run(
                     }
                     ScanUpdate::RootEntries(path, entries) => {
                         if let Some(&root) = root_indices.get(&path) {
-                            let index = scan_indices.entry(path).or_default();
-                            available_nodes
-                                .extend(install_scanned_entries(nodes, root, index, entries));
+                            let index = scan_indices.entry(path.clone()).or_default();
+                            let pending = scan_pending.entry(path).or_default();
+                            available_nodes.extend(install_scanned_entries(
+                                nodes, root, index, pending, entries,
+                            ));
                         }
                     }
                     ScanUpdate::RootFinished(path, result) => match result {
@@ -527,44 +533,64 @@ fn install_scanned_entries(
     nodes: &mut Vec<Node>,
     root: usize,
     paths: &mut std::collections::HashMap<std::path::PathBuf, usize>,
+    pending: &mut Vec<core::scan::ScanEntry>,
     entries: Vec<core::scan::ScanEntry>,
 ) -> Vec<usize> {
-    let mut available = Vec::with_capacity(entries.len());
-    for entry in entries {
-        let Some(parent) = entry.parent else {
-            let path = entry.node.path.clone();
-            nodes[root] = entry.node;
-            paths.insert(path, root);
-            available.push(root);
-            continue;
-        };
-        let Some(&parent_index) = paths.get(&parent) else {
-            continue;
-        };
-        let size = entry.node.size;
-        let files = entry.node.files;
-        let path = entry.node.path.clone();
-        let index = nodes.len();
-        nodes[parent_index].children.push(index);
-        nodes.push(entry.node);
-        paths.insert(path, index);
-        available.push(index);
-
-        let mut ancestor = Some(parent_index);
-        while let Some(index) = ancestor {
-            nodes[index].size = nodes[index].size.saturating_add(size);
-            nodes[index].files = nodes[index].files.saturating_add(files);
-            if index == root {
-                break;
+    pending.extend(entries);
+    let mut available = Vec::with_capacity(pending.len());
+    loop {
+        let mut waiting = Vec::new();
+        let mut installed = 0;
+        for mut entry in std::mem::take(pending) {
+            let Some(parent) = entry.parent.as_ref() else {
+                let path = entry.node.path.clone();
+                nodes[root] = entry.node;
+                paths.insert(path, root);
+                available.push(root);
+                installed += 1;
+                continue;
+            };
+            let Some(&parent_index) = paths.get(parent) else {
+                waiting.push(entry);
+                continue;
+            };
+            if matches!(
+                nodes[parent_index].tag,
+                core::classify::Tag::System | core::classify::Tag::Junk
+            ) {
+                entry.node.tag = nodes[parent_index].tag;
+                entry.node.reason = nodes[parent_index].reason.clone();
             }
-            ancestor = nodes[index]
-                .path
-                .parent()
-                .and_then(|parent| paths.get(parent))
-                .copied();
+            let size = entry.node.size;
+            let files = entry.node.files;
+            let path = entry.node.path.clone();
+            let index = nodes.len();
+            nodes[parent_index].children.push(index);
+            nodes.push(entry.node);
+            paths.insert(path, index);
+            available.push(index);
+
+            let mut ancestor = Some(parent_index);
+            while let Some(index) = ancestor {
+                nodes[index].size = nodes[index].size.saturating_add(size);
+                nodes[index].files = nodes[index].files.saturating_add(files);
+                if index == root {
+                    break;
+                }
+                ancestor = nodes[index]
+                    .path
+                    .parent()
+                    .and_then(|parent| paths.get(parent))
+                    .copied();
+            }
+            nodes[0].size = nodes[0].size.saturating_add(size);
+            nodes[0].files = nodes[0].files.saturating_add(files);
+            installed += 1;
         }
-        nodes[0].size = nodes[0].size.saturating_add(size);
-        nodes[0].files = nodes[0].files.saturating_add(files);
+        *pending = waiting;
+        if installed == 0 {
+            break;
+        }
     }
     available
 }
@@ -1339,10 +1365,12 @@ mod tests {
         let file = std::path::PathBuf::from("C:\\sample.bin");
         let mut nodes = pending_tree(&[root.clone(), std::path::PathBuf::from("D:\\")]);
         let mut paths = std::collections::HashMap::new();
+        let mut pending = Vec::new();
         let root_index = install_scanned_entries(
             &mut nodes,
             1,
             &mut paths,
+            &mut pending,
             vec![core::scan::ScanEntry {
                 parent: None,
                 node: core::Node {
@@ -1361,12 +1389,14 @@ mod tests {
             }],
         );
         assert_eq!(root_index, [1]);
+        let folder = root.join("folder");
         let file_index = install_scanned_entries(
             &mut nodes,
             1,
             &mut paths,
+            &mut pending,
             vec![core::scan::ScanEntry {
-                parent: Some(root.clone()),
+                parent: Some(folder.clone()),
                 node: core::Node {
                     path: file.clone(),
                     name: "sample.bin".into(),
@@ -1382,16 +1412,42 @@ mod tests {
                 },
             }],
         );
-        assert_eq!(file_index, [3]);
+        assert!(file_index.is_empty());
+        assert_eq!(pending.len(), 1);
+        let available = install_scanned_entries(
+            &mut nodes,
+            1,
+            &mut paths,
+            &mut pending,
+            vec![core::scan::ScanEntry {
+                parent: Some(root.clone()),
+                node: core::Node {
+                    path: folder.clone(),
+                    name: "folder".into(),
+                    size: 0,
+                    files: 0,
+                    directory: true,
+                    atime: None,
+                    mtime: None,
+                    children: vec![],
+                    tag: core::classify::Tag::Personal,
+                    reason: None,
+                    category: core::categories::Category::Other,
+                },
+            }],
+        );
+        assert_eq!(available, [3, 4]);
         assert_eq!(nodes[0].size, 12);
         assert_eq!(nodes[1].size, 12);
         assert_eq!(nodes[1].children, [3]);
-        assert_eq!(nodes[3].path, file);
+        assert_eq!(nodes[3].path, folder);
+        assert_eq!(nodes[3].children, [4]);
+        assert_eq!(nodes[4].path, file);
         assert_eq!(nodes[0].children, [1, 2]);
         let mut ready = std::collections::HashSet::new();
-        assert!(!ready_to_clean(&nodes, 3, &ready));
+        assert!(!ready_to_clean(&nodes, 4, &ready));
         ready.insert(1);
-        assert!(ready_to_clean(&nodes, 3, &ready));
+        assert!(ready_to_clean(&nodes, 4, &ready));
     }
 
     #[test]

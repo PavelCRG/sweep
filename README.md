@@ -13,7 +13,8 @@ Fast, keyboard-first disk space analysis for Windows and Linux.
 </div>
 
 <p align="center">
-  <img src="assets/sweep-demo.png" alt="Sweep disk analyzer showing a demo drive, largest folders, junk labels, and item details" width="100%">
+  <img src="assets/sweep-demo.png" alt="Sweep demo: two disks, colorful space bars, capacity details, and the largest folders" width="92%">
+  <br><sub>Two demo volumes · per-disk capacity · largest folders · safe demo data</sub>
 </p>
 
 Sweep opens with an overview of every scanned volume, shows each disk's own capacity, and makes the largest folders easy to spot. Review items and move them to your system Trash. The demo mode includes two virtual disks and never touches your files.
@@ -32,18 +33,16 @@ The binary is at `target/release/sweep` on Linux and `target/release/sweep.exe` 
 
 ## Quick start
 
-```sh
-sweep                         # scan mounted disks and open the TUI
-sweep --path ~/Projects       # scan a folder
-sweep --path C:\Users\Pavel  # scan a Windows folder
-sweep --demo                  # explore two safe virtual disks
-sweep --lang ru               # start the TUI in Russian (l switches languages)
-sweep --plain                 # print a readable report
-sweep --json > before.json    # save a snapshot
-sweep --compare before.json   # compare a new scan with that snapshot
-sweep --csv > report.csv      # export a spreadsheet-friendly report
-sweep --check-updates         # check for a release when you choose
-```
+| Command | What it does |
+| --- | --- |
+| `sweep` | Scan mounted disks and open the TUI |
+| `sweep --demo` | Browse two virtual disks without touching real files |
+| `sweep --path ~/Projects` | Scan a chosen folder instead of all disks |
+| `sweep --lang ru` | Start in Russian; press `l` to switch languages |
+| `sweep --dry-run` | Preview cleanup actions without changing files |
+| `sweep --plain` | Print a readable report in the terminal |
+
+For machine-readable reports, use `sweep --json > before.json` or `sweep --csv > report.csv`. Compare a saved JSON scan with `sweep --compare before.json`.
 
 Scans and reports run locally. Sweep connects to GitHub only when you explicitly run `--check-updates`; no scan data is sent.
 

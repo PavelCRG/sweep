@@ -873,6 +873,16 @@ fn category_name(category: Category, lang: Language) -> &'static str {
     }
 }
 
+fn short_category_name(category: Category, lang: Language) -> &'static str {
+    match category {
+        Category::ProjectsAndCode => lang.text("Code", "РљРѕРґ"),
+        Category::Downloads => lang.text("Down", "Р—Р°РіСЂ."),
+        Category::CachesAndTemp => lang.text("Caches", "РљСЌС€Рё"),
+        Category::MediaAndArchives => lang.text("Media", "РњРµРґРёР°"),
+        Category::Other => lang.text("Other", "Р”СЂСѓРіРѕРµ"),
+    }
+}
+
 fn category_color(category: Category) -> Color {
     match category {
         Category::ProjectsAndCode => Color::Rgb(50, 170, 245),
@@ -1080,8 +1090,13 @@ fn render_space_map(
             "■ ",
             Style::default().fg(category_color(*category)),
         ));
+        let label = if inner_width < 100 {
+            short_category_name(*category, lang)
+        } else {
+            category_name(*category, lang)
+        };
         legend.push(Span::styled(
-            format!("{}  ", category_name(*category, lang)),
+            format!("{}  ", label),
             Style::default().fg(if index == selected {
                 Color::White
             } else {
@@ -1093,7 +1108,7 @@ fn render_space_map(
     f.render_widget(
         Paragraph::new(lines).block(
             Block::default()
-                .title(format!(" SWEEP  ·  {title}  ·  SPACE MAP "))
+                .title(format!(" {title}  ·  SPACE MAP "))
                 .borders(Borders::ALL)
                 .border_type(BorderType::Rounded)
                 .border_style(Style::default().fg(Color::DarkGray)),
@@ -1207,6 +1222,23 @@ fn draw(
     scanning: bool,
 ) -> ScreenAreas {
     let area = f.area();
+    if area.width < 64 || area.height < 18 {
+        f.render_widget(
+            Paragraph::new(s.lang.text(
+                "Resize the terminal to at least 64 × 18 to browse disks.",
+                "РЈРІРµР»РёС‡СЊС‚Рµ С‚РµСЂРјРёРЅР°Р» РґРѕ 64 × 18 РґР»СЏ РїСЂРѕСЃРјРѕС‚СЂР° РґРёСЃРєРѕРІ.",
+            ))
+            .block(
+                Block::default()
+                    .title(s.lang.text(" Resize required ", " РќСѓР¶РЅРѕ СѓРІРµР»РёС‡РёС‚СЊ "))
+                    .borders(Borders::ALL)
+                    .border_type(BorderType::Rounded),
+            )
+            .alignment(Alignment::Center),
+            area,
+        );
+        return ScreenAreas::default();
+    }
     let overview = s.current == 0;
     let current_path = nodes[s.current].path.display().to_string();
     let title = if overview {
@@ -1238,13 +1270,17 @@ fn draw(
     );
     let compact = area.width < 110;
     let panes = Layout::horizontal(if compact {
-        [Constraint::Length(27), Constraint::Min(40)]
+        [Constraint::Length(23), Constraint::Min(32)]
     } else {
         [Constraint::Length(31), Constraint::Min(60)]
     })
     .split(layout[1]);
-    let content =
-        Layout::vertical([Constraint::Percentage(68), Constraint::Min(7)]).split(panes[1]);
+    let show_details = layout[1].height >= 13;
+    let content = if show_details {
+        Layout::vertical([Constraint::Min(5), Constraint::Length(7)]).split(panes[1])
+    } else {
+        Layout::vertical([Constraint::Min(1), Constraint::Length(0)]).split(panes[1])
+    };
     let shown = category_items(nodes, s, category_data);
     let category = CATEGORIES[s.selected_category.min(CATEGORIES.len() - 1)];
     let folders = shown.iter().filter(|&&i| nodes[i].directory).count();
@@ -1284,7 +1320,7 @@ fn draw(
                 core::classify::Tag::System => (s.lang.text("SYSTEM", "СИСТЕМА"), Color::Magenta),
                 _ => ("", Color::Cyan),
             };
-            let name_width = if compact { 12 } else { 20 };
+            let name_width = if compact { 10 } else { 20 };
             let name = if overview {
                 volume_name(n, demo, s.lang)
             } else if n.directory {
@@ -1390,9 +1426,14 @@ fn draw(
                 .max()
                 .unwrap_or(1)
                 .max(1);
-            let filled = ((size as u128 * 8) / max as u128) as usize;
-            let count = category_data.items[index].len();
-            ListItem::new(Line::from(vec![
+            let bar_width = if compact { 3 } else { 8 };
+            let filled = ((size as u128 * bar_width) / max as u128) as usize;
+            let label = if compact {
+                short_category_name(*category, s.lang)
+            } else {
+                category_name(*category, s.lang)
+            };
+            let mut row = vec![
                 Span::styled(
                     if index == s.selected_category {
                         "› "
@@ -1402,24 +1443,44 @@ fn draw(
                     Style::default().fg(category_color(*category)),
                 ),
                 Span::styled(
-                    category_name(*category, s.lang),
+                    label,
                     Style::default().fg(if index == s.selected_category {
                         Color::White
                     } else {
                         Color::Gray
                     }),
                 ),
-                Span::raw("\n  "),
-                Span::styled(
-                    "■".repeat(filled),
-                    Style::default().fg(category_color(*category)),
-                ),
-                Span::styled("·".repeat(8 - filled), Style::default().fg(Color::DarkGray)),
-                Span::styled(
-                    format!("  {:>7}  · {}", human(size), count),
-                    Style::default().fg(Color::Gray),
-                ),
-            ]))
+            ];
+            if compact {
+                row.extend([
+                    Span::styled(
+                        format!(" {}", "■".repeat(filled)),
+                        Style::default().fg(category_color(*category)),
+                    ),
+                    Span::styled(
+                        format!(" {:>7}", human(size)),
+                        Style::default().fg(Color::Gray),
+                    ),
+                ]);
+            } else {
+                row.extend([
+                    Span::raw("\n  "),
+                    Span::styled(
+                        "■".repeat(filled),
+                        Style::default().fg(category_color(*category)),
+                    ),
+                    Span::styled("·".repeat(8 - filled), Style::default().fg(Color::DarkGray)),
+                    Span::styled(
+                        format!(
+                            "  {:>7}  · {}",
+                            human(size),
+                            category_data.items[index].len()
+                        ),
+                        Style::default().fg(Color::Gray),
+                    ),
+                ]);
+            }
+            ListItem::new(Line::from(row))
         })
         .collect::<Vec<_>>();
     f.render_widget(
@@ -1451,26 +1512,28 @@ fn draw(
                 "В этой папке нет элементов",
             ))]
         });
-    f.render_widget(
-        Paragraph::new(detail)
-            .block(
-                Block::default()
-                    .title(if selected_usage.is_some() {
-                        s.lang.text(" DISK DETAILS ", " ДИСК ")
-                    } else {
-                        s.lang.text(" ITEM DETAILS ", " ЭЛЕМЕНТ ")
-                    })
-                    .borders(Borders::ALL)
-                    .border_type(BorderType::Rounded)
-                    .border_style(if s.focus_right {
-                        Style::default().fg(Color::Cyan)
-                    } else {
-                        Style::default().fg(Color::DarkGray)
-                    }),
-            )
-            .wrap(Wrap { trim: true }),
-        content[1],
-    );
+    if show_details {
+        f.render_widget(
+            Paragraph::new(detail)
+                .block(
+                    Block::default()
+                        .title(if selected_usage.is_some() {
+                            s.lang.text(" DISK DETAILS ", " ДИСК ")
+                        } else {
+                            s.lang.text(" ITEM DETAILS ", " ЭЛЕМЕНТ ")
+                        })
+                        .borders(Borders::ALL)
+                        .border_type(BorderType::Rounded)
+                        .border_style(if s.focus_right {
+                            Style::default().fg(Color::Cyan)
+                        } else {
+                            Style::default().fg(Color::DarkGray)
+                        }),
+                )
+                .wrap(Wrap { trim: true }),
+            content[1],
+        );
+    }
     let warning = if s.confirm_delete {
         s.lang.text(
             "DELETE  ·  press d again to move this item to Trash",
@@ -1478,7 +1541,7 @@ fn draw(
         )
     } else if compact {
         s.lang.text(
-            "↑↓ move Enter open ← up g folder a files c clean f filter l lang d Trash q quit",
+            "j/k move  Enter open  Esc back  g culprit  a files  c clean  f filter  d Trash  q quit",
             "↑↓ выбор Enter открыть ← назад g папка a файлы c очистка f фильтр l язык d корзина q выход",
         )
     } else {
@@ -1487,6 +1550,8 @@ fn draw(
             "↑↓ выбор   Enter открыть   ← назад   g большая папка   a файлы   c очистка   f фильтр   l язык   d корзина   r скан   q выход",
         )
     };
+    let status_width = layout[2].width.saturating_sub(42) as usize;
+    let status = fit(&s.status, status_width);
     f.render_widget(
         Paragraph::new(vec![
             Line::from(Span::styled(
@@ -1512,7 +1577,7 @@ fn draw(
                     human(s.trashed),
                     s.lang.text("sent to Trash", "в корзину")
                 )),
-                Span::styled(&s.status, Style::default().fg(Color::Yellow)),
+                Span::styled(status, Style::default().fg(Color::Yellow)),
             ]),
         ]),
         layout[2],
@@ -2103,6 +2168,39 @@ mod tests {
         let rendered = render_text(&nodes, Language::En, true);
         assert!(rendered.contains("Live scan"), "{rendered}");
         assert!(!rendered.contains("Other on disk"), "{rendered}");
+    }
+
+    #[test]
+    fn tiny_terminal_shows_resize_message_without_drawing_panels() {
+        let mut nodes = core::demo::tree();
+        ensure_scan_root(&mut nodes);
+        let volume_usage = volume_usages(&nodes, true);
+        let mut terminal = Terminal::new(TestBackend::new(40, 10)).unwrap();
+        terminal
+            .draw(|frame| {
+                let areas = draw(
+                    frame,
+                    &nodes,
+                    &Store::new(&nodes, Language::En),
+                    &volume_usage,
+                    &category_data_by_volume(&nodes),
+                    volume_usage[0],
+                    true,
+                    false,
+                );
+                assert_eq!(areas.map.width, 0);
+                assert_eq!(areas.categories.height, 0);
+            })
+            .unwrap();
+        let rendered = terminal
+            .backend()
+            .buffer()
+            .content()
+            .iter()
+            .map(|cell| cell.symbol())
+            .collect::<String>();
+        assert!(rendered.contains("Resize the terminal"));
+        assert!(!rendered.contains("CATEGORIES"));
     }
 
     fn render_text(nodes: &[core::Node], lang: Language, scanning: bool) -> String {

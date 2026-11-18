@@ -1,11 +1,5 @@
 use super::Node;
 
-pub fn sorted_children(nodes: &[Node], parent: usize) -> Vec<usize> {
-    let mut out = nodes[parent].children.clone();
-    out.sort_by_key(|&i| (!nodes[i].directory, std::cmp::Reverse(nodes[i].size)));
-    out
-}
-
 pub fn largest_children(nodes: &[Node], parent: usize) -> Vec<usize> {
     let mut out = nodes[parent].children.clone();
     out.sort_by_key(|&i| std::cmp::Reverse(nodes[i].size));

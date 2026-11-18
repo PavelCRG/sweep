@@ -3,6 +3,7 @@ use crate::{core::Node, ui::lang::Language};
 pub struct Store {
     pub current: usize,
     pub selected: usize,
+    pub selected_category: usize,
     pub only_junk: bool,
     pub junk_only: bool,
     pub largest_files: bool,
@@ -17,6 +18,7 @@ impl Store {
         Self {
             current: 0,
             selected: 0,
+            selected_category: 0,
             only_junk: false,
             junk_only: false,
             largest_files: false,

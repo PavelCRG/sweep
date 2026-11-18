@@ -4,7 +4,10 @@ use crate::{
     ui::{bar, lang::Language, store::Store},
 };
 use crossterm::{
-    event::{self, Event, KeyCode, KeyEventKind},
+    event::{
+        self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyEventKind, MouseButton,
+        MouseEventKind,
+    },
     execute,
     terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
 };
@@ -21,11 +24,36 @@ use std::{
 };
 use unicode_width::UnicodeWidthChar;
 
+type Category = core::categories::Category;
+
+const CATEGORIES: [Category; 5] = [
+    Category::ProjectsAndCode,
+    Category::Downloads,
+    Category::CachesAndTemp,
+    Category::MediaAndArchives,
+    Category::Other,
+];
+
+#[derive(Clone, Default)]
+struct CategoryData {
+    sizes: [u64; 5],
+    items: [Vec<usize>; 5],
+}
+
+#[derive(Clone, Copy, Default)]
+struct ScreenAreas {
+    map: Rect,
+    categories: Rect,
+    items: Rect,
+    item_offset: usize,
+    map_segments: [usize; 6],
+}
+
 struct TerminalGuard;
 impl Drop for TerminalGuard {
     fn drop(&mut self) {
         let _ = disable_raw_mode();
-        let _ = execute!(io::stdout(), LeaveAlternateScreen);
+        let _ = execute!(io::stdout(), DisableMouseCapture, LeaveAlternateScreen);
     }
 }
 
@@ -39,7 +67,7 @@ pub fn run(
 ) -> Result<(), Box<dyn std::error::Error>> {
     ensure_scan_root(nodes);
     enable_raw_mode()?;
-    execute!(io::stdout(), EnterAlternateScreen)?;
+    execute!(io::stdout(), EnterAlternateScreen, EnableMouseCapture)?;
     let _guard = TerminalGuard;
     let mut terminal = Terminal::new(CrosstermBackend::new(io::stdout()))?;
     let mut s = Store::new(nodes, lang);
@@ -73,6 +101,7 @@ pub fn run(
         std::path::PathBuf,
         Vec<core::scan::ScanEntry>,
     > = std::collections::HashMap::new();
+    let mut category_data = category_data_by_volume(nodes);
     let mut available_nodes = std::collections::HashSet::new();
     if scan.is_some() {
         s.status = s
@@ -114,9 +143,19 @@ pub fn run(
                         if let Some(&root) = root_indices.get(&path) {
                             let index = scan_indices.entry(path.clone()).or_default();
                             let pending = scan_pending.entry(path).or_default();
-                            available_nodes.extend(install_scanned_entries(
-                                nodes, root, index, pending, entries,
-                            ));
+                            let added =
+                                install_scanned_entries(nodes, root, index, pending, entries);
+                            if let Some(volume) = nodes[0].children.iter().position(|&i| i == root)
+                            {
+                                update_category_data(
+                                    &mut category_data[volume],
+                                    nodes,
+                                    root,
+                                    index,
+                                    &added,
+                                );
+                            }
+                            available_nodes.extend(added);
                         }
                     }
                     ScanUpdate::RootFinished(path, result) => match result {
@@ -167,6 +206,7 @@ pub fn run(
                         ensure_scan_root(nodes);
                         ready_roots = nodes[0].children.iter().copied().collect();
                         volume_usage = volume_usages(nodes, demo);
+                        category_data = category_data_by_volume(nodes);
                     }
                     Err(e) if e.kind() == std::io::ErrorKind::Interrupted => {
                         cancelled.store(false, Ordering::Relaxed);
@@ -192,11 +232,28 @@ pub fn run(
             .and_then(|i| nodes[0].children.iter().position(|&root| root == i))
             .and_then(|i| volume_usage.get(i).copied())
             .unwrap_or_else(|| aggregate_usage(&volume_usage));
-        terminal.draw(|f| draw(f, nodes, &s, &volume_usage, usage, demo, scan.is_some()))?;
+        let mut areas = ScreenAreas::default();
+        terminal.draw(|f| {
+            areas = draw(
+                f,
+                nodes,
+                &s,
+                &volume_usage,
+                &category_data,
+                usage,
+                demo,
+                scan.is_some(),
+            )
+        })?;
         if scan.is_some() && !event::poll(Duration::from_millis(100))? {
             continue;
         }
-        if let Event::Key(k) = event::read()? {
+        let input = event::read()?;
+        if let Event::Mouse(mouse) = &input {
+            handle_mouse(nodes, &mut s, &category_data, areas, *mouse);
+            continue;
+        }
+        if let Event::Key(k) = input {
             if k.kind != KeyEventKind::Press {
                 continue;
             }
@@ -213,13 +270,22 @@ pub fn run(
                 } else {
                     match k.code {
                         KeyCode::Down | KeyCode::Char('j') => {
-                            let shown = visible_children(nodes, &s);
-                            if !shown.is_empty() {
-                                s.selected = (s.selected + 1).min(shown.len() - 1);
+                            if s.focus_right {
+                                let shown = visible_children(nodes, &s, &category_data);
+                                if !shown.is_empty() {
+                                    s.selected = (s.selected + 1).min(shown.len() - 1);
+                                }
+                            } else {
+                                s.selected_category =
+                                    (s.selected_category + 1).min(CATEGORIES.len() - 1);
                             }
                         }
                         KeyCode::Up | KeyCode::Char('k') => {
-                            s.selected = s.selected.saturating_sub(1);
+                            if s.focus_right {
+                                s.selected = s.selected.saturating_sub(1);
+                            } else {
+                                s.selected_category = s.selected_category.saturating_sub(1);
+                            }
                         }
                         KeyCode::Tab => s.focus_right = !s.focus_right,
                         KeyCode::Char('l') => s.lang.toggle(),
@@ -227,67 +293,69 @@ pub fn run(
                             s.largest_files = !s.largest_files;
                             s.junk_only = false;
                             s.only_junk = false;
+                            s.focus_right = true;
                             s.selected = 0;
                         }
                         KeyCode::Char('c') => {
                             s.junk_only = !s.junk_only;
                             s.largest_files = false;
                             s.only_junk = false;
+                            s.focus_right = true;
                             s.selected = 0;
                         }
                         KeyCode::Char('f') => {
                             s.only_junk = !s.only_junk;
                             s.junk_only = false;
                             s.largest_files = false;
+                            s.focus_right = true;
                             s.selected = 0;
                         }
                         KeyCode::Enter | KeyCode::Right => {
-                            let shown = visible_children(nodes, &s);
-                            if let Some(&item) = shown.get(s.selected) {
-                                let root = if s.current == 0 {
-                                    Some(item)
-                                } else {
-                                    selected_volume(nodes, s.current)
-                                };
-                                if nodes[item].directory
-                                    && (available_nodes.contains(&item)
-                                        || root.is_some_and(|root| ready_roots.contains(&root)))
-                                {
-                                    s.current = item;
-                                    s.selected = 0;
-                                    continue;
+                            if !s.focus_right {
+                                s.focus_right = true;
+                                s.selected = 0;
+                            } else {
+                                let shown = visible_children(nodes, &s, &category_data);
+                                if let Some(&item) = shown.get(s.selected) {
+                                    let root = selected_volume(nodes, item);
+                                    if nodes[item].directory
+                                        && (available_nodes.contains(&item)
+                                            || root.is_some_and(|root| ready_roots.contains(&root)))
+                                    {
+                                        s.current = item;
+                                        s.selected = 0;
+                                        s.selected_category = category_index(nodes[item].category);
+                                        continue;
+                                    }
+                                    s.status = s
+                                        .lang
+                                        .text(
+                                            "This disk is still being scanned",
+                                            "Этот диск ещё сканируется",
+                                        )
+                                        .into();
                                 }
-                                s.status = s
-                                    .lang
-                                    .text(
-                                        "This disk is still being scanned",
-                                        "Этот диск ещё сканируется",
-                                    )
-                                    .into();
                             }
                         }
-                        KeyCode::Left if s.current != 0 => {
-                            s.current = nodes[s.current]
-                                .path
-                                .parent()
-                                .and_then(|parent| {
-                                    nodes.iter().position(|node| node.path == parent)
-                                })
-                                .unwrap_or(0);
-                            s.selected = 0;
+                        KeyCode::Left => {
+                            if s.focus_right && s.current != 0 {
+                                go_up(nodes, &mut s);
+                            } else {
+                                s.focus_right = false;
+                            }
                         }
                         KeyCode::Char('g') => {
-                            let shown = visible_children(nodes, &s);
-                            if let Some(&item) = shown.get(s.selected) {
-                                if let Some(culprit) = core::browse::culprit(nodes, item) {
-                                    s.current = culprit;
-                                    s.selected = 0;
+                            if s.focus_right {
+                                let shown = visible_children(nodes, &s, &category_data);
+                                if let Some(&item) = shown.get(s.selected) {
+                                    if let Some(culprit) = core::browse::culprit(nodes, item) {
+                                        s.current = culprit;
+                                        s.selected = 0;
+                                        s.selected_category =
+                                            category_index(nodes[culprit].category);
+                                    }
                                 }
                             }
-                        }
-                        KeyCode::Char('f') => {
-                            s.only_junk = !s.only_junk;
-                            s.selected = 0;
                         }
                         KeyCode::Char('d') => {
                             s.status = s
@@ -303,46 +371,58 @@ pub fn run(
                 }
                 continue;
             }
-            let shown = visible_children(nodes, &s);
+            let shown = visible_children(nodes, &s, &category_data);
             match k.code {
                 KeyCode::Char('q') => break,
                 KeyCode::Char('c') if k.modifiers.contains(event::KeyModifiers::CONTROL) => break,
                 KeyCode::Down | KeyCode::Char('j') => {
-                    if !shown.is_empty() {
-                        s.selected = (s.selected + 1).min(shown.len() - 1);
+                    if s.focus_right {
+                        if !shown.is_empty() {
+                            s.selected = (s.selected + 1).min(shown.len() - 1);
+                        }
+                    } else {
+                        s.selected_category = (s.selected_category + 1).min(CATEGORIES.len() - 1);
                     }
                     s.confirm_delete = false;
                 }
                 KeyCode::Up | KeyCode::Char('k') => {
-                    s.selected = s.selected.saturating_sub(1);
+                    if s.focus_right {
+                        s.selected = s.selected.saturating_sub(1);
+                    } else {
+                        s.selected_category = s.selected_category.saturating_sub(1);
+                    }
                     s.confirm_delete = false;
                 }
                 KeyCode::Right | KeyCode::Enter => {
-                    if let Some(&i) = shown.get(s.selected) {
+                    if !s.focus_right {
+                        s.focus_right = true;
+                        s.selected = 0;
+                    } else if let Some(&i) = shown.get(s.selected) {
                         if nodes[i].directory {
                             s.current = i;
                             s.selected = 0;
+                            s.selected_category = category_index(nodes[i].category);
                             s.confirm_delete = false;
                         }
                     }
                 }
                 KeyCode::Left | KeyCode::Esc => {
-                    if s.current != 0 {
-                        s.current = nodes[s.current]
-                            .path
-                            .parent()
-                            .and_then(|p| nodes.iter().position(|n| n.path == p))
-                            .unwrap_or(0);
-                        s.selected = 0;
-                        s.confirm_delete = false;
+                    if s.focus_right && s.current != 0 {
+                        go_up(nodes, &mut s);
+                    } else {
+                        s.focus_right = false;
                     }
+                    s.confirm_delete = false;
                 }
                 KeyCode::Char('g') => {
-                    if let Some(&i) = shown.get(s.selected) {
-                        if let Some(c) = core::browse::culprit(nodes, i) {
-                            s.current = c;
-                            s.selected = 0;
-                            s.confirm_delete = false;
+                    if s.focus_right {
+                        if let Some(&i) = shown.get(s.selected) {
+                            if let Some(c) = core::browse::culprit(nodes, i) {
+                                s.current = c;
+                                s.selected = 0;
+                                s.selected_category = category_index(nodes[c].category);
+                                s.confirm_delete = false;
+                            }
                         }
                     }
                 }
@@ -350,6 +430,7 @@ pub fn run(
                     s.only_junk = !s.only_junk;
                     s.junk_only = false;
                     s.selected = 0;
+                    s.focus_right = true;
                     s.confirm_delete = false;
                 }
                 KeyCode::Char('c') => {
@@ -357,6 +438,7 @@ pub fn run(
                     s.largest_files = false;
                     s.only_junk = false;
                     s.selected = 0;
+                    s.focus_right = true;
                     s.confirm_delete = false;
                 }
                 KeyCode::Char('a') => {
@@ -364,6 +446,7 @@ pub fn run(
                     s.junk_only = false;
                     s.only_junk = false;
                     s.selected = 0;
+                    s.focus_right = true;
                     s.confirm_delete = false;
                 }
                 KeyCode::Char('l') => {
@@ -390,7 +473,15 @@ pub fn run(
                 }
                 KeyCode::Tab => s.focus_right = !s.focus_right,
                 KeyCode::Char('d') => {
-                    if let Some(&i) = shown.get(s.selected) {
+                    if !s.focus_right {
+                        s.status = s
+                            .lang
+                            .text(
+                                "Select an item in the right pane first",
+                                "Сначала выберите элемент справа",
+                            )
+                            .into();
+                    } else if let Some(&i) = shown.get(s.selected) {
                         if !ready_to_clean(nodes, i, &ready_roots) {
                             s.status = s
                                 .lang
@@ -765,6 +856,335 @@ fn selected_volume(nodes: &[Node], current: usize) -> Option<usize> {
         .find(|&root| nodes[current].path.starts_with(&nodes[root].path))
 }
 
+fn category_index(category: Category) -> usize {
+    CATEGORIES
+        .iter()
+        .position(|&item| item == category)
+        .unwrap_or(4)
+}
+
+fn category_name(category: Category, lang: Language) -> &'static str {
+    match category {
+        Category::ProjectsAndCode => lang.text("Projects & code", "Проекты и код"),
+        Category::Downloads => lang.text("Downloads", "Загрузки"),
+        Category::CachesAndTemp => lang.text("Caches & temp", "Кэши и временные"),
+        Category::MediaAndArchives => lang.text("Media & archives", "Медиа и архивы"),
+        Category::Other => lang.text("Other", "Другое"),
+    }
+}
+
+fn category_color(category: Category) -> Color {
+    match category {
+        Category::ProjectsAndCode => Color::Rgb(50, 170, 245),
+        Category::Downloads => Color::Rgb(63, 112, 235),
+        Category::CachesAndTemp => Color::Rgb(244, 112, 36),
+        Category::MediaAndArchives => Color::Rgb(166, 91, 230),
+        Category::Other => Color::Rgb(42, 192, 164),
+    }
+}
+
+fn category_data_by_volume(nodes: &[Node]) -> Vec<CategoryData> {
+    nodes[0]
+        .children
+        .iter()
+        .map(|&root| {
+            let mut data = CategoryData::default();
+            let mut stack: Vec<(usize, Option<usize>)> = vec![(root, None)];
+            while let Some((index, parent)) = stack.pop() {
+                let node = &nodes[index];
+                let category = category_index(node.category);
+                if let Some(parent) = parent {
+                    if nodes[parent].category != node.category {
+                        data.items[category].push(index);
+                    }
+                } else {
+                    data.items[4].push(index);
+                }
+                if node.directory {
+                    stack.extend(node.children.iter().map(|&child| (child, Some(index))));
+                } else {
+                    data.sizes[category] = data.sizes[category].saturating_add(node.size);
+                }
+            }
+            data
+        })
+        .collect()
+}
+
+fn update_category_data(
+    data: &mut CategoryData,
+    nodes: &[Node],
+    root: usize,
+    paths: &std::collections::HashMap<std::path::PathBuf, usize>,
+    added: &[usize],
+) {
+    for &index in added {
+        let node = &nodes[index];
+        let category = category_index(node.category);
+        if index == root {
+            if !data.items[4].contains(&root) {
+                data.items[4].push(root);
+            }
+        } else if node
+            .path
+            .parent()
+            .and_then(|parent| paths.get(parent))
+            .is_some_and(|&parent| nodes[parent].category != node.category)
+        {
+            data.items[category].push(index);
+        }
+        if !node.directory {
+            data.sizes[category] = data.sizes[category].saturating_add(node.size);
+        }
+    }
+}
+
+fn aggregate_category_data(data: &[CategoryData]) -> CategoryData {
+    let mut all = CategoryData::default();
+    for volume in data {
+        for index in 0..CATEGORIES.len() {
+            all.sizes[index] = all.sizes[index].saturating_add(volume.sizes[index]);
+            all.items[index].extend(volume.items[index].iter().copied());
+        }
+    }
+    all
+}
+
+fn category_items(nodes: &[Node], store: &Store, data: &[CategoryData]) -> Vec<usize> {
+    let category = CATEGORIES[store.selected_category.min(CATEGORIES.len() - 1)];
+    let mut items = if store.junk_only {
+        core::browse::cleanup_candidates(nodes, store.current)
+    } else if store.largest_files {
+        core::browse::largest_files(nodes, store.current)
+    } else if store.current == 0 {
+        nodes[0].children.clone()
+    } else if selected_volume(nodes, store.current) == Some(store.current)
+        && category != Category::Other
+    {
+        let root = nodes[store.current].path.clone();
+        let volume = nodes[0]
+            .children
+            .iter()
+            .position(|&i| nodes[i].path == root);
+        volume
+            .and_then(|i| data.get(i))
+            .map(|volume| volume.items[category_index(category)].clone())
+            .unwrap_or_default()
+            .into_iter()
+            .filter(|&i| nodes[i].path.starts_with(&root))
+            .collect()
+    } else {
+        nodes[store.current]
+            .children
+            .iter()
+            .copied()
+            .filter(|&i| nodes[i].category == category)
+            .collect()
+    };
+    items.retain(|&i| !store.only_junk || cleanup_candidate(nodes, i));
+    items.sort_by_key(|&i| std::cmp::Reverse(nodes[i].size));
+    items
+}
+
+fn current_category_data(nodes: &[Node], store: &Store, data: &[CategoryData]) -> CategoryData {
+    if store.current == 0 {
+        return aggregate_category_data(data);
+    }
+    let Some(volume) = selected_volume(nodes, store.current) else {
+        return CategoryData::default();
+    };
+    nodes[0]
+        .children
+        .iter()
+        .position(|&root| root == volume)
+        .and_then(|index| data.get(index))
+        .cloned()
+        .unwrap_or_default()
+}
+
+fn render_space_map(
+    f: &mut Frame,
+    area: Rect,
+    title: &str,
+    usage: bar::Usage,
+    data: &CategoryData,
+    selected: usize,
+    scanning: bool,
+    lang: Language,
+) -> [usize; 6] {
+    let inner_width = area.width.saturating_sub(2) as usize;
+    let segments = map_widths(data, usage, inner_width);
+    let percent_full = percent(usage.used(), usage.total());
+    let mut lines = vec![Line::from(vec![
+        Span::styled(
+            format!(" {} ", human(usage.used())),
+            Style::default()
+                .fg(Color::White)
+                .add_modifier(Modifier::BOLD),
+        ),
+        Span::styled(
+            lang.text("used of", "занято из"),
+            Style::default().fg(Color::DarkGray),
+        ),
+        Span::styled(
+            format!(" {}  ·  ", human(usage.total())),
+            Style::default().fg(Color::Gray),
+        ),
+        Span::styled(
+            format!(
+                "{} {}  ·  {}%",
+                human(usage.free),
+                lang.text("free", "свободно"),
+                percent_full
+            ),
+            Style::default().fg(Color::Gray),
+        ),
+        Span::styled(
+            if scanning {
+                "  ·  LIVE"
+            } else {
+                "  ·  READY"
+            },
+            Style::default().fg(if scanning {
+                Color::Yellow
+            } else {
+                Color::Green
+            }),
+        ),
+    ])];
+    let glyphs = ["●", "●", "●", "●", "●", "·"];
+    for _ in 0..3 {
+        let mut row = Vec::new();
+        for (index, width) in segments.iter().enumerate() {
+            let color = if index == selected.min(4) {
+                if index == 5 {
+                    Color::DarkGray
+                } else {
+                    category_color(CATEGORIES[index])
+                }
+            } else if index == 5 || data.sizes.get(index).copied().unwrap_or(0) == 0 {
+                Color::Rgb(40, 45, 52)
+            } else {
+                category_color(CATEGORIES[index])
+            };
+            row.push(Span::styled(
+                glyphs[index].repeat(*width),
+                Style::default().fg(color),
+            ));
+        }
+        lines.push(Line::from(row));
+    }
+    let mut legend = Vec::new();
+    for (index, category) in CATEGORIES.iter().enumerate() {
+        legend.push(Span::styled(
+            "■ ",
+            Style::default().fg(category_color(*category)),
+        ));
+        legend.push(Span::styled(
+            format!("{}  ", category_name(*category, lang)),
+            Style::default().fg(if index == selected {
+                Color::White
+            } else {
+                Color::Gray
+            }),
+        ));
+    }
+    lines.push(Line::from(legend));
+    f.render_widget(
+        Paragraph::new(lines).block(
+            Block::default()
+                .title(format!(" SWEEP  ·  {title}  ·  SPACE MAP "))
+                .borders(Borders::ALL)
+                .border_type(BorderType::Rounded)
+                .border_style(Style::default().fg(Color::DarkGray)),
+        ),
+        area,
+    );
+    segments
+}
+
+fn handle_mouse(
+    nodes: &[Node],
+    store: &mut Store,
+    data: &[CategoryData],
+    areas: ScreenAreas,
+    mouse: event::MouseEvent,
+) {
+    if !matches!(
+        mouse.kind,
+        MouseEventKind::Moved | MouseEventKind::Down(MouseButton::Left)
+    ) {
+        return;
+    }
+    let x = mouse.column;
+    let y = mouse.row;
+    if areas.categories.contains(Position { x, y }) {
+        let row = y.saturating_sub(areas.categories.y + 1) as usize;
+        if row < CATEGORIES.len() {
+            store.selected_category = row;
+            store.selected = 0;
+            store.confirm_delete = false;
+        }
+    } else if areas.map.contains(Position { x, y }) {
+        let offset = x.saturating_sub(areas.map.x + 1) as usize;
+        let mut edge = 0;
+        for index in 0..5 {
+            edge += areas.map_segments[index];
+            if offset < edge {
+                store.selected_category = index;
+                store.selected = 0;
+                break;
+            }
+        }
+    } else if areas.items.contains(Position { x, y }) {
+        let shown = category_items(nodes, store, data);
+        let index = y.saturating_sub(areas.items.y + 1) as usize + areas.item_offset;
+        if index < shown.len() {
+            store.selected = index;
+            store.focus_right = true;
+            store.confirm_delete = false;
+        }
+    }
+}
+
+fn go_up(nodes: &[Node], store: &mut Store) {
+    store.current = nodes[store.current]
+        .path
+        .parent()
+        .and_then(|parent| nodes.iter().position(|node| node.path == parent))
+        .unwrap_or(0);
+    store.selected = 0;
+    store.confirm_delete = false;
+}
+
+fn map_widths(data: &CategoryData, usage: bar::Usage, width: usize) -> [usize; 6] {
+    let mut amounts = data.sizes.to_vec();
+    let classified = data
+        .sizes
+        .iter()
+        .fold(0u64, |sum, size| sum.saturating_add(*size));
+    amounts.push(usage.used().saturating_sub(classified));
+    let total = amounts.iter().map(|&v| u128::from(v)).sum::<u128>();
+    let mut widths = [0usize; 6];
+    if total == 0 {
+        return widths;
+    }
+    let mut remainders = [(0usize, 0u128); 6];
+    let mut allocated = 0;
+    for (index, amount) in amounts.iter().enumerate() {
+        let numerator = width as u128 * u128::from(*amount);
+        widths[index] = (numerator / total) as usize;
+        allocated += widths[index];
+        remainders[index] = (index, numerator % total);
+    }
+    remainders
+        .sort_by_key(|&(index, remainder)| (amounts[index] == 0, std::cmp::Reverse(remainder)));
+    for &(index, _) in remainders.iter().take(width.saturating_sub(allocated)) {
+        widths[index] += 1;
+    }
+    widths
+}
+
 fn classified_sizes(nodes: &[Node], i: usize) -> (u64, u64) {
     match nodes[i].tag {
         core::classify::Tag::Junk => (nodes[i].size, 0),
@@ -781,42 +1201,52 @@ fn draw(
     nodes: &[Node],
     s: &Store,
     volume_usage: &[bar::Usage],
+    category_data: &[CategoryData],
     usage: bar::Usage,
     demo: bool,
     scanning: bool,
-) {
+) -> ScreenAreas {
     let area = f.area();
-    let overview = s.current == 0 && !s.largest_files && !s.junk_only;
+    let overview = s.current == 0;
     let current_path = nodes[s.current].path.display().to_string();
     let title = if overview {
         s.lang.text("Disk overview", "Обзор дисков")
     } else {
         &current_path
     };
+    let map_title = if scanning {
+        format!("{title} · Live scan")
+    } else {
+        title.to_owned()
+    };
     let layout = Layout::vertical([
-        Constraint::Length(5),
-        Constraint::Min(7),
+        Constraint::Length(7),
+        Constraint::Min(8),
         Constraint::Length(2),
     ])
     .split(area);
-    bar::render(f, layout[0], title, usage, s.lang);
+    let map_data = current_category_data(nodes, s, category_data);
+    let map_segments = render_space_map(
+        f,
+        layout[0],
+        &map_title,
+        usage,
+        &map_data,
+        s.selected_category,
+        scanning,
+        s.lang,
+    );
     let compact = area.width < 110;
     let panes = Layout::horizontal(if compact {
-        [Constraint::Percentage(55), Constraint::Percentage(45)]
+        [Constraint::Length(27), Constraint::Min(40)]
     } else {
-        [Constraint::Percentage(62), Constraint::Percentage(38)]
+        [Constraint::Length(31), Constraint::Min(60)]
     })
     .split(layout[1]);
-    let shown: Vec<_> = if s.junk_only {
-        core::browse::cleanup_candidates(nodes, s.current)
-    } else if s.largest_files {
-        core::browse::largest_files(nodes, s.current)
-    } else {
-        core::browse::sorted_children(nodes, s.current)
-    }
-    .into_iter()
-    .filter(|&i| !s.only_junk || cleanup_candidate(nodes, i))
-    .collect();
+    let content =
+        Layout::vertical([Constraint::Percentage(68), Constraint::Min(7)]).split(panes[1]);
+    let shown = category_items(nodes, s, category_data);
+    let category = CATEGORIES[s.selected_category.min(CATEGORIES.len() - 1)];
     let folders = shown.iter().filter(|&&i| nodes[i].directory).count();
     let files = shown.len() - folders;
     let list_title = if s.largest_files {
@@ -826,13 +1256,6 @@ fn draw(
             " {}  /  {}",
             s.lang.text("CLEANUP CANDIDATES", "К ОЧИСТКЕ"),
             shown.len()
-        )
-    } else if overview {
-        format!(
-            " {}  /  {} {} ",
-            s.lang.text("SCAN ROOTS", "ТОЧКИ СКАНИРОВАНИЯ"),
-            folders,
-            s.lang.text("volumes", "дисков")
         )
     } else if s.only_junk {
         format!(
@@ -845,9 +1268,10 @@ fn draw(
         )
     } else {
         format!(
-            " {}  {folders}  /  {}  {files} ",
-            s.lang.text("FOLDERS", "ПАПКИ"),
-            s.lang.text("FILES", "ФАЙЛЫ")
+            " {}  ·  {folders} {}  /  {files} {} ",
+            category_name(category, s.lang),
+            s.lang.text("folders", "папок"),
+            s.lang.text("files", "файлов")
         )
     };
     let items = shown
@@ -942,7 +1366,7 @@ fn draw(
             })
     };
     let list = List::new(items)
-        .block(border(!s.focus_right))
+        .block(border(s.focus_right))
         .highlight_style(
             Style::default()
                 .bg(Color::Rgb(24, 45, 57))
@@ -953,7 +1377,67 @@ fn draw(
     if !shown.is_empty() {
         state.select(Some(s.selected.min(shown.len() - 1)));
     }
-    f.render_stateful_widget(list, panes[0], &mut state);
+    let category_data = current_category_data(nodes, s, category_data);
+    let category_rows = CATEGORIES
+        .iter()
+        .enumerate()
+        .map(|(index, category)| {
+            let size = category_data.sizes[index];
+            let max = category_data
+                .sizes
+                .iter()
+                .copied()
+                .max()
+                .unwrap_or(1)
+                .max(1);
+            let filled = ((size as u128 * 8) / max as u128) as usize;
+            let count = category_data.items[index].len();
+            ListItem::new(Line::from(vec![
+                Span::styled(
+                    if index == s.selected_category {
+                        "› "
+                    } else {
+                        "  "
+                    },
+                    Style::default().fg(category_color(*category)),
+                ),
+                Span::styled(
+                    category_name(*category, s.lang),
+                    Style::default().fg(if index == s.selected_category {
+                        Color::White
+                    } else {
+                        Color::Gray
+                    }),
+                ),
+                Span::raw("\n  "),
+                Span::styled(
+                    "■".repeat(filled),
+                    Style::default().fg(category_color(*category)),
+                ),
+                Span::styled("·".repeat(8 - filled), Style::default().fg(Color::DarkGray)),
+                Span::styled(
+                    format!("  {:>7}  · {}", human(size), count),
+                    Style::default().fg(Color::Gray),
+                ),
+            ]))
+        })
+        .collect::<Vec<_>>();
+    f.render_widget(
+        List::new(category_rows).block(
+            Block::default()
+                .title(s.lang.text(" CATEGORIES ", " КАТЕГОРИИ "))
+                .borders(Borders::ALL)
+                .border_type(BorderType::Rounded)
+                .border_style(if s.focus_right {
+                    Style::default().fg(Color::DarkGray)
+                } else {
+                    Style::default().fg(Color::Cyan)
+                }),
+        ),
+        panes[0],
+    );
+    f.render_stateful_widget(list, content[0], &mut state);
+    let item_offset = state.offset();
     let selected = shown.get(s.selected).copied();
     let selected_usage = selected
         .filter(|&i| overview && nodes[0].children.contains(&i))
@@ -985,7 +1469,7 @@ fn draw(
                     }),
             )
             .wrap(Wrap { trim: true }),
-        panes[1],
+        content[1],
     );
     let warning = if s.confirm_delete {
         s.lang.text(
@@ -1033,6 +1517,13 @@ fn draw(
         ]),
         layout[2],
     );
+    ScreenAreas {
+        map: layout[0],
+        categories: panes[0],
+        items: content[0],
+        item_offset,
+        map_segments,
+    }
 }
 
 fn details(
@@ -1306,18 +1797,8 @@ fn cleanup_candidate(nodes: &[Node], i: usize) -> bool {
         && classified_sizes(nodes, i) != (0, 0))
 }
 
-fn visible_children(nodes: &[Node], store: &Store) -> Vec<usize> {
-    let children = if store.junk_only {
-        core::browse::cleanup_candidates(nodes, store.current)
-    } else if store.largest_files {
-        core::browse::largest_files(nodes, store.current)
-    } else {
-        core::browse::sorted_children(nodes, store.current)
-    };
-    children
-        .into_iter()
-        .filter(|&i| !store.only_junk || cleanup_candidate(nodes, i))
-        .collect()
+fn visible_children(nodes: &[Node], store: &Store, data: &[CategoryData]) -> Vec<usize> {
+    category_items(nodes, store, data)
 }
 
 fn ready_to_clean(
@@ -1390,13 +1871,13 @@ fn fit(value: &str, width: usize) -> String {
 #[cfg(test)]
 mod tests {
     use super::{
-        aggregate_usage, cleanup_candidate, draw, ensure_scan_root, independent_roots,
-        install_scanned_entries, pending_tree, ready_to_clean, scan_roots, selected_volume,
-        volume_usages,
+        aggregate_usage, category_data_by_volume, cleanup_candidate, draw, ensure_scan_root,
+        independent_roots, install_scanned_entries, map_widths, pending_tree, ready_to_clean,
+        scan_roots, selected_volume, volume_usages, CategoryData,
     };
     use crate::{
         core,
-        ui::{lang::Language, store::Store},
+        ui::{bar, lang::Language, store::Store},
     };
     use ratatui::{backend::TestBackend, Terminal};
 
@@ -1532,7 +2013,27 @@ mod tests {
         ensure_scan_root(&mut nodes);
         let rendered = render_text(&nodes, Language::En, false);
         assert!(rendered.contains("Disk overview"), "{rendered}");
-        assert!(rendered.contains("DISK DETAILS"), "{rendered}");
+        assert!(rendered.contains("CATEGORIES"), "{rendered}");
+        assert!(rendered.contains("SPACE MAP"), "{rendered}");
+    }
+
+    #[test]
+    fn space_map_segments_fill_width_and_preserve_unknown_space() {
+        let mut data = CategoryData::default();
+        data.sizes[0] = 60;
+        data.sizes[1] = 20;
+        let widths = map_widths(
+            &data,
+            bar::Usage {
+                personal: 100,
+                ..bar::Usage::default()
+            },
+            40,
+        );
+        assert_eq!(widths.iter().sum::<usize>(), 40);
+        assert_eq!(widths[5], 8);
+        assert_eq!(widths[0], 24);
+        assert_eq!(widths[1], 8);
     }
 
     #[test]
@@ -1609,15 +2110,16 @@ mod tests {
         let mut terminal = Terminal::new(TestBackend::new(140, 38)).unwrap();
         terminal
             .draw(|frame| {
-                draw(
+                let _ = draw(
                     frame,
                     nodes,
                     &Store::new(nodes, lang),
                     &volume_usage,
+                    &category_data_by_volume(nodes),
                     volume_usage[0],
                     true,
                     scanning,
-                )
+                );
             })
             .unwrap();
         terminal

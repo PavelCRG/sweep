@@ -11,6 +11,8 @@ pub struct Store {
     pub confirm_delete: bool,
     pub status: String,
     pub focus_right: bool,
+    pub menu_open: bool,
+    pub menu_selected: usize,
     pub lang: Language,
 }
 impl Store {
@@ -26,6 +28,8 @@ impl Store {
             confirm_delete: false,
             status: String::new(),
             focus_right: false,
+            menu_open: false,
+            menu_selected: 0,
             lang,
         }
     }

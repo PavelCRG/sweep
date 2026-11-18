@@ -250,11 +250,43 @@ pub fn run(
         }
         let input = event::read()?;
         if let Event::Mouse(mouse) = &input {
-            handle_mouse(nodes, &mut s, &category_data, areas, *mouse);
+            if !s.menu_open {
+                handle_mouse(nodes, &mut s, &category_data, areas, *mouse);
+            }
             continue;
         }
-        if let Event::Key(k) = input {
+        if let Event::Key(mut k) = input {
             if k.kind != KeyEventKind::Press {
+                continue;
+            }
+            if s.menu_open {
+                let actions = menu_actions(s.lang, scan.is_some(), demo);
+                s.menu_selected = s.menu_selected.min(actions.len().saturating_sub(1));
+                match k.code {
+                    KeyCode::Esc | KeyCode::Char('?') | KeyCode::Char('m') => {
+                        s.menu_open = false;
+                        continue;
+                    }
+                    KeyCode::Up | KeyCode::Char('k') => {
+                        s.menu_selected = s.menu_selected.saturating_sub(1);
+                        continue;
+                    }
+                    KeyCode::Down | KeyCode::Char('j') => {
+                        s.menu_selected = (s.menu_selected + 1).min(actions.len() - 1);
+                        continue;
+                    }
+                    KeyCode::Enter => {
+                        k.code = actions[s.menu_selected].0;
+                        s.menu_open = false;
+                    }
+                    code if actions.iter().any(|(action, _, _)| *action == code) => {
+                        s.menu_open = false;
+                    }
+                    _ => continue,
+                }
+            } else if matches!(k.code, KeyCode::Char('?') | KeyCode::Char('m')) {
+                s.menu_open = true;
+                s.menu_selected = 0;
                 continue;
             }
             if let Some(job) = &scan {
@@ -885,11 +917,11 @@ fn short_category_name(category: Category, lang: Language) -> &'static str {
 
 fn category_color(category: Category) -> Color {
     match category {
-        Category::ProjectsAndCode => Color::Rgb(50, 170, 245),
-        Category::Downloads => Color::Rgb(72, 205, 145),
-        Category::CachesAndTemp => Color::Rgb(244, 112, 36),
-        Category::MediaAndArchives => Color::Rgb(166, 91, 230),
-        Category::Other => Color::Rgb(42, 192, 190),
+        Category::ProjectsAndCode => Color::Rgb(73, 157, 255),
+        Category::Downloads => Color::Rgb(50, 220, 135),
+        Category::CachesAndTemp => Color::Rgb(255, 130, 48),
+        Category::MediaAndArchives => Color::Rgb(245, 65, 170),
+        Category::Other => Color::Rgb(44, 220, 218),
     }
 }
 
@@ -1118,11 +1150,13 @@ fn render_space_map(
         };
         legend.push(Span::styled(
             format!("{}  ", label),
-            Style::default().fg(if index == selected {
-                Color::White
-            } else {
-                Color::Gray
-            }),
+            Style::default()
+                .fg(category_color(*category))
+                .add_modifier(if index == selected {
+                    Modifier::BOLD
+                } else {
+                    Modifier::empty()
+                }),
         ));
     }
     lines.push(Line::from(legend));
@@ -1230,6 +1264,129 @@ fn classified_sizes(nodes: &[Node], i: usize) -> (u64, u64) {
             (j.saturating_add(cj), u.saturating_add(cu))
         }),
     }
+}
+
+fn menu_actions(
+    lang: Language,
+    scanning: bool,
+    demo: bool,
+) -> Vec<(KeyCode, &'static str, &'static str)> {
+    let mut actions = vec![
+        (
+            KeyCode::Enter,
+            "↵",
+            lang.text("Open selected item", "Открыть выбранное"),
+        ),
+        (
+            KeyCode::Char('g'),
+            "g",
+            lang.text("Go to largest folder", "Перейти в большую папку"),
+        ),
+        (
+            KeyCode::Char('a'),
+            "a",
+            lang.text("Show largest files", "Крупнейшие файлы"),
+        ),
+        (
+            KeyCode::Char('c'),
+            "c",
+            lang.text("Review cleanup candidates", "Кандидаты на очистку"),
+        ),
+        (
+            KeyCode::Char('f'),
+            "f",
+            lang.text("Toggle Junk + Unused filter", "Фильтр мусора и старого"),
+        ),
+        (
+            KeyCode::Char('d'),
+            "d",
+            lang.text("Move selected item to Trash", "Переместить в корзину"),
+        ),
+        (
+            KeyCode::Char('l'),
+            "l",
+            lang.text("Switch interface language", "Сменить язык интерфейса"),
+        ),
+    ];
+    if !scanning && !demo {
+        actions.push((
+            KeyCode::Char('r'),
+            "r",
+            lang.text("Rescan disks", "Пересканировать диски"),
+        ));
+    }
+    actions.push((
+        KeyCode::Char('q'),
+        "q",
+        lang.text("Quit sweep", "Выйти из sweep"),
+    ));
+    actions
+}
+
+fn draw_action_menu(
+    f: &mut Frame,
+    area: Rect,
+    actions: &[(KeyCode, &'static str, &'static str)],
+    selected: usize,
+    lang: Language,
+) {
+    let width = area.width.min(58);
+    let height = (actions.len() as u16 + 3).min(area.height.saturating_sub(2));
+    let popup = Rect {
+        x: area.x + (area.width - width) / 2,
+        y: area.y + (area.height - height) / 2,
+        width,
+        height,
+    };
+    f.render_widget(Clear, popup);
+    let block = Block::default()
+        .title(lang.text(" ACTIONS  ·  ? to close ", " ДЕЙСТВИЯ  ·  ? закрыть "))
+        .borders(Borders::ALL)
+        .border_type(BorderType::Rounded)
+        .border_style(Style::default().fg(Color::Rgb(80, 190, 255)))
+        .style(Style::default().bg(Color::Rgb(12, 16, 22)));
+    let inner = block.inner(popup);
+    f.render_widget(block, popup);
+    let rows = actions
+        .iter()
+        .map(|(_, key, label)| {
+            let color = match *key {
+                "d" => Color::Rgb(255, 102, 102),
+                "c" => Color::Rgb(255, 196, 87),
+                "r" => Color::Rgb(70, 210, 160),
+                _ => Color::Rgb(80, 190, 255),
+            };
+            ListItem::new(Line::from(vec![
+                Span::styled(
+                    format!(" {:>2} ", key),
+                    Style::default().fg(color).add_modifier(Modifier::BOLD),
+                ),
+                Span::styled(format!(" {label}"), Style::default().fg(Color::White)),
+            ]))
+        })
+        .collect::<Vec<_>>();
+    let content = Layout::vertical([Constraint::Min(1), Constraint::Length(1)]).split(inner);
+    let mut state = ListState::default();
+    if !actions.is_empty() {
+        state.select(Some(selected.min(actions.len() - 1)));
+    }
+    f.render_stateful_widget(
+        List::new(rows).highlight_symbol("› ").highlight_style(
+            Style::default()
+                .bg(Color::Rgb(26, 42, 57))
+                .add_modifier(Modifier::BOLD),
+        ),
+        content[0],
+        &mut state,
+    );
+    f.render_widget(
+        Paragraph::new(lang.text(
+            "↑/↓ choose  ·  Enter run  ·  Esc close",
+            "↑/↓ выбор  ·  Enter выполнить  ·  Esc закрыть",
+        ))
+        .style(Style::default().fg(Color::DarkGray)),
+        content[1],
+    );
 }
 
 fn draw(
@@ -1484,11 +1641,13 @@ fn draw(
                 ),
                 Span::styled(
                     label,
-                    Style::default().fg(if index == s.selected_category {
-                        Color::White
-                    } else {
-                        Color::Gray
-                    }),
+                    Style::default().fg(category_color(*category)).add_modifier(
+                        if index == s.selected_category {
+                            Modifier::BOLD
+                        } else {
+                            Modifier::empty()
+                        },
+                    ),
                 ),
             ];
             if compact {
@@ -1581,12 +1740,12 @@ fn draw(
         )
     } else if compact {
         s.lang.text(
-            "j/k move  Enter open  Esc back  g culprit  a files  c clean  f filter  d Trash  q quit",
+            "↑↓ move Enter open ← up g folder a files c clean f filter d Trash ? menu q quit",
             "↑↓ выбор Enter открыть ← назад g папка a файлы c очистка f фильтр l язык d корзина q выход",
         )
     } else {
         s.lang.text(
-            "↑↓ move   Enter open   ← up   g largest folder   a files   c cleanup   f filter   l language   d Trash   r rescan   q quit",
+            "↑↓ move   Enter open   ← up   g largest folder   a files   c cleanup   f filter   l language   d Trash   r rescan   ? menu   q quit",
             "↑↓ выбор   Enter открыть   ← назад   g большая папка   a файлы   c очистка   f фильтр   l язык   d корзина   r скан   q выход",
         )
     };
@@ -1622,13 +1781,18 @@ fn draw(
         ]),
         layout[2],
     );
-    ScreenAreas {
+    let areas = ScreenAreas {
         map: layout[0],
         categories: panes[0],
         items: content[0],
         item_offset,
         map_segments,
+    };
+    if s.menu_open {
+        let actions = menu_actions(s.lang, scanning, demo);
+        draw_action_menu(f, area, &actions, s.menu_selected, s.lang);
     }
+    areas
 }
 
 fn details(
@@ -1671,7 +1835,7 @@ fn details(
         Line::from(Span::styled(
             n.name.clone(),
             Style::default()
-                .fg(Color::White)
+                .fg(item_color(n.tag, n.category))
                 .add_modifier(Modifier::BOLD),
         )),
         Line::from(Span::styled(
@@ -1683,22 +1847,14 @@ fn details(
             Span::styled(
                 human(n.size),
                 Style::default()
-                    .fg(Color::Cyan)
+                    .fg(item_color(n.tag, n.category))
                     .add_modifier(Modifier::BOLD),
             ),
             Span::raw(format!("   {} {}", n.files, lang.text("files", "файлов"))),
         ]),
         Line::from(vec![
             Span::raw(format!("{}  ", lang.text("Type", "Тип"))),
-            Span::styled(
-                tag,
-                Style::default().fg(match n.tag {
-                    core::classify::Tag::Junk => Color::Red,
-                    core::classify::Tag::Unused => Color::Yellow,
-                    core::classify::Tag::System => Color::Magenta,
-                    _ => Color::Green,
-                }),
-            ),
+            Span::styled(tag, Style::default().fg(item_color(n.tag, n.category))),
         ]),
         Line::from(format!(
             "{}  {category}",
@@ -1984,6 +2140,7 @@ mod tests {
         core,
         ui::{bar, lang::Language, store::Store},
     };
+    use crossterm::event::KeyCode;
     use ratatui::{backend::TestBackend, Terminal};
 
     #[test]
@@ -2014,6 +2171,56 @@ mod tests {
             ),
             ratatui::style::Color::Rgb(185, 135, 255)
         );
+    }
+
+    #[test]
+    fn action_menu_exposes_cleanup_and_hides_rescan_while_busy() {
+        let ready = super::menu_actions(Language::En, false, false);
+        assert!(ready
+            .iter()
+            .any(|(key, _, label)| { *key == KeyCode::Char('d') && label.contains("Trash") }));
+        assert!(ready
+            .iter()
+            .any(|(key, _, label)| { *key == KeyCode::Char('r') && label.contains("Rescan") }));
+        let busy = super::menu_actions(Language::En, true, false);
+        assert!(!busy.iter().any(|(key, _, _)| *key == KeyCode::Char('r')));
+    }
+
+    #[test]
+    fn action_menu_renders_over_the_disk_view() {
+        let mut nodes = core::demo::tree();
+        ensure_scan_root(&mut nodes);
+        let volume_usage = volume_usages(&nodes, true);
+        let mut store = Store::new(&nodes, Language::En);
+        store.menu_open = true;
+        let mut terminal = Terminal::new(TestBackend::new(80, 24)).unwrap();
+        terminal
+            .draw(|frame| {
+                let _ = draw(
+                    frame,
+                    &nodes,
+                    &store,
+                    &volume_usage,
+                    &category_data_by_volume(&nodes),
+                    volume_usage[0],
+                    true,
+                    false,
+                );
+            })
+            .unwrap();
+        let rendered = terminal
+            .backend()
+            .buffer()
+            .content()
+            .iter()
+            .map(|cell| cell.symbol())
+            .collect::<String>();
+        assert!(rendered.contains("ACTIONS"), "{rendered}");
+        assert!(
+            rendered.contains("Move selected item to Trash"),
+            "{rendered}"
+        );
+        assert!(rendered.contains("Esc close"), "{rendered}");
     }
 
     #[test]

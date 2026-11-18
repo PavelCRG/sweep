@@ -886,10 +886,31 @@ fn short_category_name(category: Category, lang: Language) -> &'static str {
 fn category_color(category: Category) -> Color {
     match category {
         Category::ProjectsAndCode => Color::Rgb(50, 170, 245),
-        Category::Downloads => Color::Rgb(63, 112, 235),
+        Category::Downloads => Color::Rgb(72, 205, 145),
         Category::CachesAndTemp => Color::Rgb(244, 112, 36),
         Category::MediaAndArchives => Color::Rgb(166, 91, 230),
-        Category::Other => Color::Rgb(42, 192, 164),
+        Category::Other => Color::Rgb(42, 192, 190),
+    }
+}
+
+fn volume_color(index: usize) -> Color {
+    const COLORS: [Color; 6] = [
+        Color::Rgb(72, 166, 255),
+        Color::Rgb(70, 210, 160),
+        Color::Rgb(196, 120, 255),
+        Color::Rgb(255, 164, 78),
+        Color::Rgb(255, 105, 145),
+        Color::Rgb(245, 210, 90),
+    ];
+    COLORS[index % COLORS.len()]
+}
+
+fn item_color(tag: core::classify::Tag, category: Category) -> Color {
+    match tag {
+        core::classify::Tag::Junk => Color::Rgb(255, 102, 102),
+        core::classify::Tag::Unused => Color::Rgb(255, 196, 87),
+        core::classify::Tag::System => Color::Rgb(185, 135, 255),
+        core::classify::Tag::Personal => category_color(category),
     }
 }
 
@@ -1314,11 +1335,12 @@ fn draw(
         .iter()
         .map(|&i| {
             let n = &nodes[i];
+            let color = item_color(n.tag, n.category);
             let (tag, color) = match n.tag {
-                core::classify::Tag::Junk => (s.lang.text("JUNK", "МУСОР"), Color::Red),
-                core::classify::Tag::Unused => (s.lang.text("UNUSED", "СТАРОЕ"), Color::Yellow),
-                core::classify::Tag::System => (s.lang.text("SYSTEM", "СИСТЕМА"), Color::Magenta),
-                _ => ("", Color::Cyan),
+                core::classify::Tag::Junk => (s.lang.text("JUNK", "МУСОР"), color),
+                core::classify::Tag::Unused => (s.lang.text("UNUSED", "СТАРОЕ"), color),
+                core::classify::Tag::System => (s.lang.text("SYSTEM", "СИСТЕМА"), color),
+                _ => ("", color),
             };
             let name_width = if compact { 10 } else { 20 };
             let name = if overview {
@@ -1326,12 +1348,30 @@ fn draw(
             } else if n.directory {
                 format!("▸ {}", n.name)
             } else {
-                n.name.clone()
+                format!("· {}", n.name)
             };
-            let mut row = vec![Span::raw(format!(
-                "{:<name_width$} ",
-                fit(&name, name_width)
-            ))];
+            let name_color = if overview {
+                nodes[0]
+                    .children
+                    .iter()
+                    .position(|&root| root == i)
+                    .map(volume_color)
+                    .unwrap_or(color)
+            } else {
+                color
+            };
+            let name_style =
+                Style::default()
+                    .fg(name_color)
+                    .add_modifier(if overview || n.directory {
+                        Modifier::BOLD
+                    } else {
+                        Modifier::empty()
+                    });
+            let mut row = vec![Span::styled(
+                format!("{:<name_width$} ", fit(&name, name_width)),
+                name_style,
+            )];
             if overview {
                 let item_usage = nodes[0]
                     .children
@@ -1945,6 +1985,36 @@ mod tests {
         ui::{bar, lang::Language, store::Store},
     };
     use ratatui::{backend::TestBackend, Terminal};
+
+    #[test]
+    fn disk_accents_are_distinct_and_item_colors_follow_meaning() {
+        let accents = (0..6).map(super::volume_color).collect::<Vec<_>>();
+        assert!(accents
+            .iter()
+            .enumerate()
+            .all(|(i, color)| accents.iter().skip(i + 1).all(|other| color != other)));
+        assert_eq!(
+            super::item_color(
+                core::classify::Tag::Personal,
+                core::categories::Category::MediaAndArchives
+            ),
+            super::category_color(core::categories::Category::MediaAndArchives)
+        );
+        assert_eq!(
+            super::item_color(
+                core::classify::Tag::Junk,
+                core::categories::Category::ProjectsAndCode
+            ),
+            ratatui::style::Color::Rgb(255, 102, 102)
+        );
+        assert_eq!(
+            super::item_color(
+                core::classify::Tag::System,
+                core::categories::Category::ProjectsAndCode
+            ),
+            ratatui::style::Color::Rgb(185, 135, 255)
+        );
+    }
 
     #[test]
     fn pending_tree_shows_every_drive_before_scanning_finishes() {

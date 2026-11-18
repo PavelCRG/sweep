@@ -4,7 +4,7 @@
 
 ### See what is filling your disks. Clean up with confidence.
 
-Fast, keyboard-first disk space analysis for Windows and Linux.
+Local-first, keyboard-driven disk space analysis for Windows and Linux.
 
 [![CI](https://github.com/PavelCRG/sweep/actions/workflows/ci.yml/badge.svg)](https://github.com/PavelCRG/sweep/actions/workflows/ci.yml)
 [![Release](https://img.shields.io/badge/release-v0.1.5-22d3ee)](https://github.com/PavelCRG/sweep/releases/tag/v0.1.5)
@@ -12,18 +12,21 @@ Fast, keyboard-first disk space analysis for Windows and Linux.
 
 </div>
 
-<p align="center">
-  <img src="assets/sweep-demo.png" alt="Sweep demo: two disks, colorful space bars, capacity details, and the largest folders" width="92%">
-  <br><sub>Two demo volumes · per-disk capacity · largest folders · safe demo data</sub>
-</p>
-
-Sweep opens its disk overview immediately, then shows folders and sizes as they are found. You can start drilling into a drive before its full scan finishes. Cleanup unlocks for a drive only when that drive is fully scanned. The screenshot uses synthetic demo disks only; it contains no personal paths or file names.
+Sweep opens a disk overview while scans run. Browse folders as entries arrive; sizes are marked as partial until that disk finishes. Find the largest folders or files, review cleanup candidates, and move selected items to the system Trash.
 
 ## Install
 
-Download the archive for your system from the [v0.1.5 release](https://github.com/PavelCRG/sweep/releases/tag/v0.1.5), extract it, and run `sweep` (or `sweep.exe` on Windows). Each release includes a SHA-256 checksum file.
+Download a standalone x86-64 binary and its checksum from the [v0.1.5 release](https://github.com/PavelCRG/sweep/releases/tag/v0.1.5):
 
-Or build the standalone binary from source with Rust installed:
+| Platform | Download |
+| --- | --- |
+| Windows | [sweep-windows-x86_64.zip](https://github.com/PavelCRG/sweep/releases/download/v0.1.5/sweep-windows-x86_64.zip) |
+| Linux | [sweep-linux-x86_64.tar.gz](https://github.com/PavelCRG/sweep/releases/download/v0.1.5/sweep-linux-x86_64.tar.gz) |
+| Checksums | [SHA256SUMS.txt](https://github.com/PavelCRG/sweep/releases/download/v0.1.5/SHA256SUMS.txt) |
+
+Extract the archive and run `sweep` (`sweep.exe` on Windows).
+
+The current `main` branch includes the largest-files (`a`) and cleanup-candidates (`c`) views. These views are newer than the v0.1.5 release binaries; build from source to use them until the next release:
 
 ```sh
 cargo build --release --locked
@@ -36,42 +39,38 @@ The binary is at `target/release/sweep` on Linux and `target/release/sweep.exe` 
 | Command | What it does |
 | --- | --- |
 | `sweep` | Scan mounted disks and open the TUI |
-| `sweep --demo` | Browse two virtual disks without touching real files |
-| `sweep --path ~/Projects` | Scan a chosen folder instead of all disks |
-| `sweep --lang ru` | Start in Russian; press `l` to switch languages |
-| `sweep --dry-run` | Preview cleanup actions without changing files |
-| `sweep --plain` | Print a readable report in the terminal |
+| `sweep --demo` | Browse virtual disks without touching real files |
+| `sweep --path ~/Projects` | Scan a chosen directory |
+| `sweep --lang ru` | Start the interface in Russian; press `l` to switch languages |
+| `sweep --dry-run` | Preview cleanup without changing files |
+| `sweep --plain` | Print a readable text report |
 
-For machine-readable reports, use `sweep --json > before.json` or `sweep --csv > report.csv`. Compare a saved JSON scan with `sweep --compare before.json`.
+Export or compare scans with `sweep --json > scan.json`, `sweep --csv > scan.csv`, and `sweep --compare scan.json`.
 
-Scans and reports run locally. Sweep connects to GitHub only when you explicitly run `--check-updates`; no scan data is sent.
-
-## Explore the TUI
+## Keyboard controls
 
 | Key | Action |
 | --- | --- |
-| `↑` / `↓` or `j` / `k` | Move through the list |
-| `Enter` / `→` | Open a folder or disk |
-| `Esc` / `←` | Go up; cancel a rescan |
-| `g` | Jump into the largest space-using child |
+| `↑` / `↓`, `j` / `k` | Move through the list |
+| `Enter` / `→` | Open a disk or folder |
+| `Esc` / `←` | Go up; cancel the initial scan with `Esc` |
+| `g` | Jump to the largest folder below the selected item |
 | `a` | Show the 100 largest files under the current folder or disk overview |
-| `c` | Show safe cleanup candidates such as caches and temporary folders |
-| `f` | Show everything or only Junk and Unused |
-| `l` | Switch between English and Russian |
+| `c` | Show Junk cleanup candidates |
+| `f` | Show all items or only Junk and Unused |
 | `d` twice | Move the selected item to Trash |
-| `r` | Rescan the selected disks |
+| `r` | Rescan |
 | `Tab` | Switch panel focus |
+| `l` | Switch interface language |
 | `q` | Quit |
-
-`Ctrl+C` cancels the initial scan. Unreadable or locked entries are skipped and counted.
 
 ## Safe cleanup
 
-Sweep explains its `JUNK`, `UNUSED`, and `SYSTEM` labels. Press `c` to list cache and temporary cleanup candidates, review each item, then press `d` twice to move it to the operating system's Trash. The TUI totals the size moved during the session; empty the operating system's Trash to reclaim disk space. Protected system paths are blocked. Use `--dry-run` to preview cleanup without changing files; `--demo` is always non-destructive.
+Review the item, its size, and its label before cleanup. Press `d` twice to move it to the system Trash. Sweep blocks protected system paths and shows the total successfully moved during the current session. Empty the system Trash to reclaim disk space. Use `--dry-run` to preview actions; `--demo` never changes real files.
 
-## Reports
+## Local data and reports
 
-JSON snapshots can be compared later with `--compare`. Comparisons match paths and show size changes, including added and removed files. CSV exports include paths, sizes, tags, categories, and label reasons.
+Scanning and reports run locally. Sweep contacts GitHub only when you explicitly use `--check-updates`; scan data is not sent. JSON snapshots can be compared later to show size changes and added or removed paths. CSV and JSON reports include paths, sizes, categories, and cleanup labels.
 
 ## Build and verify
 
@@ -81,9 +80,7 @@ cargo test --locked
 cargo build --release --locked
 ```
 
-GitHub Actions checks Windows and Linux builds. Version tags such as `v0.1.5` produce standalone archives and SHA-256 checksums.
-
-The TUI starts in English; use `--lang ru` to start in Russian or press `l` to switch while browsing.
+GitHub Actions checks Windows and Linux builds. Version tags produce standalone archives and SHA-256 checksums.
 
 ## Project
 

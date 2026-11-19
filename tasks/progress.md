@@ -46,3 +46,9 @@
 - Replaced whole-path lowercase allocations in category detection with case-insensitive comparisons over path components and the filename. Category precedence and uppercase matching are covered by the existing test.
 - After the change, debug runs: 2.47 s, 3.06 s, 2.47 s (median 2.47 s, about 22% faster than baseline). Release runs: 1.97 s, 1.93 s, 1.92 s (median 1.93 s).
 - `cargo test --locked`: 37 passed. `cargo build --locked` and `cargo build --locked --release`: passed. The separate window now runs the release binary.
+
+## Navigation usability refinement
+
+- Startup keyboard focus now lands on the disk/item list, so the first Enter opens the selected disk. Tab still switches focus to categories; clicking the category pane updates focus to match.
+- Parent navigation now uses a compact index vector maintained as progressive scan batches arrive, replacing a full-tree path search on each Back action.
+- `cargo test --locked`: 38 passed. Debug and release builds passed; the fresh release window is running and responsive.

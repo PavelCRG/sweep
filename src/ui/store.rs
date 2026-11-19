@@ -27,10 +27,21 @@ impl Store {
             trashed: 0,
             confirm_delete: false,
             status: String::new(),
-            focus_right: false,
+            focus_right: true,
             menu_open: false,
             menu_selected: 0,
             lang,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::Store;
+    use crate::ui::lang::Language;
+
+    #[test]
+    fn disk_list_is_focused_on_startup() {
+        assert!(Store::new(&[], Language::En).focus_right);
     }
 }

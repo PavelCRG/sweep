@@ -103,6 +103,7 @@ pub fn run(
         std::path::PathBuf,
         Vec<core::scan::ScanEntry>,
     > = std::collections::HashMap::new();
+    let mut parents = build_parent_indices(nodes);
     let mut category_data = category_data_by_volume(nodes);
     let mut available_nodes = std::collections::HashSet::new();
     if scan.is_some() {
@@ -145,8 +146,14 @@ pub fn run(
                         if let Some(&root) = root_indices.get(&path) {
                             let index = scan_indices.entry(path.clone()).or_default();
                             let pending = scan_pending.entry(path).or_default();
-                            let added =
-                                install_scanned_entries(nodes, root, index, pending, entries);
+                            let added = install_scanned_entries(
+                                nodes,
+                                root,
+                                index,
+                                pending,
+                                entries,
+                                &mut parents,
+                            );
                             if let Some(volume) = nodes[0].children.iter().position(|&i| i == root)
                             {
                                 update_category_data(
@@ -206,6 +213,7 @@ pub fn run(
                             .text("Scan refreshed", "Сканирование завершено")
                             .into();
                         ensure_scan_root(nodes);
+                        parents = build_parent_indices(nodes);
                         ready_roots = nodes[0].children.iter().copied().collect();
                         volume_usage = volume_usages(nodes, demo);
                         category_data = category_data_by_volume(nodes);
@@ -373,7 +381,7 @@ pub fn run(
                         }
                         KeyCode::Left => {
                             if s.focus_right && s.current != 0 {
-                                go_up(nodes, &mut s);
+                                go_up(&mut s, &parents);
                             } else {
                                 s.focus_right = false;
                             }
@@ -442,7 +450,7 @@ pub fn run(
                 }
                 KeyCode::Left | KeyCode::Esc => {
                     if s.focus_right && s.current != 0 {
-                        go_up(nodes, &mut s);
+                        go_up(&mut s, &parents);
                     } else {
                         s.focus_right = false;
                     }
@@ -699,6 +707,7 @@ fn install_scanned_entries(
     paths: &mut std::collections::HashMap<std::path::PathBuf, usize>,
     pending: &mut Vec<core::scan::ScanEntry>,
     entries: Vec<core::scan::ScanEntry>,
+    parents: &mut Vec<usize>,
 ) -> Vec<usize> {
     pending.extend(entries);
     let mut available = Vec::with_capacity(pending.len());
@@ -731,6 +740,7 @@ fn install_scanned_entries(
             let index = nodes.len();
             nodes[parent_index].children.push(index);
             nodes.push(entry.node);
+            parents.push(parent_index);
             paths.insert(path, index);
             available.push(index);
 
@@ -1225,6 +1235,7 @@ fn handle_mouse(
     let x = mouse.column;
     let y = mouse.row;
     if areas.categories.contains(Position { x, y }) {
+        store.focus_right = false;
         let row = y.saturating_sub(areas.categories.y + 1) as usize;
         if row < CATEGORIES.len() {
             store.selected_category = row;
@@ -1232,6 +1243,7 @@ fn handle_mouse(
             store.confirm_delete = false;
         }
     } else if areas.map.contains(Position { x, y }) {
+        store.focus_right = false;
         let offset = x.saturating_sub(areas.map.x + 1) as usize;
         let mut edge = 0;
         for index in 0..5 {
@@ -1253,12 +1265,20 @@ fn handle_mouse(
     }
 }
 
-fn go_up(nodes: &[Node], store: &mut Store) {
-    store.current = nodes[store.current]
-        .path
-        .parent()
-        .and_then(|parent| nodes.iter().position(|node| node.path == parent))
-        .unwrap_or(0);
+fn build_parent_indices(nodes: &[Node]) -> Vec<usize> {
+    let mut parents = vec![0; nodes.len()];
+    for (parent, node) in nodes.iter().enumerate() {
+        for &child in &node.children {
+            if child < parents.len() {
+                parents[child] = parent;
+            }
+        }
+    }
+    parents
+}
+
+fn go_up(store: &mut Store, parents: &[usize]) {
+    store.current = parents.get(store.current).copied().unwrap_or(0);
     store.selected = 0;
     store.confirm_delete = false;
 }
@@ -2201,9 +2221,9 @@ fn fit(value: &str, width: usize) -> String {
 #[cfg(test)]
 mod tests {
     use super::{
-        aggregate_usage, category_data_by_volume, cleanup_candidate, draw, ensure_scan_root,
-        independent_roots, install_scanned_entries, map_widths, pending_tree, ready_to_clean,
-        scan_roots, selected_volume, volume_usages, CategoryData,
+        aggregate_usage, build_parent_indices, category_data_by_volume, cleanup_candidate, draw,
+        ensure_scan_root, independent_roots, install_scanned_entries, map_widths, pending_tree,
+        ready_to_clean, scan_roots, selected_volume, volume_usages, CategoryData,
     };
     use crate::{
         core,
@@ -2432,6 +2452,7 @@ mod tests {
         let folder = root.join("folder");
         let file = folder.join("sample.bin");
         let mut nodes = pending_tree(&[root.clone(), std::path::PathBuf::from("volume-d")]);
+        let mut parents = build_parent_indices(&nodes);
         let mut paths = std::collections::HashMap::new();
         let mut pending = Vec::new();
         let root_index = install_scanned_entries(
@@ -2455,6 +2476,7 @@ mod tests {
                     category: core::categories::Category::Other,
                 },
             }],
+            &mut parents,
         );
         assert_eq!(root_index, [1]);
         let file_index = install_scanned_entries(
@@ -2478,6 +2500,7 @@ mod tests {
                     category: core::categories::Category::Other,
                 },
             }],
+            &mut parents,
         );
         assert!(file_index.is_empty());
         assert_eq!(pending.len(), 1);
@@ -2502,6 +2525,7 @@ mod tests {
                     category: core::categories::Category::Other,
                 },
             }],
+            &mut parents,
         );
         assert_eq!(available, [3, 4]);
         assert_eq!(nodes[0].size, 12);
@@ -2512,6 +2536,9 @@ mod tests {
         assert_eq!(nodes[4].path, file);
         assert_eq!(nodes[4].tag, core::classify::Tag::Junk);
         assert_eq!(nodes[0].children, [1, 2]);
+        assert_eq!(parents[1], 0);
+        assert_eq!(parents[3], 1);
+        assert_eq!(parents[4], 3);
         let mut ready = std::collections::HashSet::new();
         assert!(!ready_to_clean(&nodes, 4, &ready));
         ready.insert(1);

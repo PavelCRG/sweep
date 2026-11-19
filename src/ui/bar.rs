@@ -1,6 +1,3 @@
-use crate::{plain::human, ui::lang::Language};
-use ratatui::{prelude::*, widgets::*};
-
 #[derive(Clone, Copy, Debug, Default)]
 pub struct Usage {
     pub personal: u64,
@@ -22,53 +19,6 @@ impl Usage {
     pub fn used(self) -> u64 {
         self.total().saturating_sub(self.free)
     }
-}
-
-pub fn render(f: &mut Frame, area: Rect, title: &str, usage: Usage, lang: Language) {
-    let parts = [
-        (lang.text("Personal", "Личное"), usage.personal, Color::Cyan),
-        (lang.text("Junk", "Мусор"), usage.junk, Color::Red),
-        (
-            lang.text("Unused", "Давно не открывали"),
-            usage.unused,
-            Color::Yellow,
-        ),
-        (lang.text("Other", "Другое"), usage.other, Color::Magenta),
-        (lang.text("Free", "Свободно"), usage.free, Color::DarkGray),
-    ];
-    let widths = segment_widths(
-        &parts.map(|part| part.1),
-        area.width.saturating_sub(2) as usize,
-    );
-    let mut meter = Vec::new();
-    let mut legend = Vec::new();
-    for ((name, amount, color), width) in parts.into_iter().zip(widths) {
-        meter.push(Span::styled("█".repeat(width), Style::default().fg(color)));
-        if amount > 0 {
-            legend.push(Span::styled(
-                format!("■ {name} {}   ", human(amount)),
-                Style::default().fg(color),
-            ));
-        }
-    }
-    let title = Line::from(vec![
-        Span::styled(
-            "SWEEP",
-            Style::default()
-                .fg(Color::Cyan)
-                .add_modifier(Modifier::BOLD),
-        ),
-        Span::raw(format!("  ·  {title}")),
-    ]);
-    f.render_widget(
-        Paragraph::new(vec![Line::from(meter), Line::from(legend)]).block(
-            Block::default()
-                .title(title)
-                .borders(Borders::ALL)
-                .border_type(BorderType::Rounded),
-        ),
-        area,
-    );
 }
 
 pub(super) fn segment_widths(amounts: &[u64; 5], width: usize) -> [usize; 5] {
@@ -95,9 +45,7 @@ pub(super) fn segment_widths(amounts: &[u64; 5], width: usize) -> [usize; 5] {
 
 #[cfg(test)]
 mod tests {
-    use super::{render, segment_widths, Usage};
-    use crate::ui::lang::Language;
-    use ratatui::{backend::TestBackend, Terminal};
+    use super::segment_widths;
 
     #[test]
     fn meter_segments_fill_the_width_without_overflow() {
@@ -113,35 +61,5 @@ mod tests {
         );
         assert_eq!(segment_widths(&[u64::MAX, u64::MAX, 0, 0, 0], 99)[4], 0);
         assert_eq!(segment_widths(&[0; 5], 20), [0; 5]);
-    }
-
-    #[test]
-    fn legend_keeps_small_nonzero_categories_visible() {
-        let mut terminal = Terminal::new(TestBackend::new(120, 5)).unwrap();
-        terminal
-            .draw(|frame| {
-                render(
-                    frame,
-                    frame.area(),
-                    "Disk",
-                    Usage {
-                        personal: 1_000_000_000_000,
-                        junk: 1,
-                        free: 1_000_000_000_000,
-                        ..Usage::default()
-                    },
-                    Language::En,
-                )
-            })
-            .unwrap();
-        let rendered = terminal
-            .backend()
-            .buffer()
-            .content()
-            .iter()
-            .map(|cell| cell.symbol())
-            .collect::<String>();
-        assert!(rendered.contains("Junk"), "{rendered}");
-        assert!(rendered.contains("1.0 B"), "{rendered}");
     }
 }

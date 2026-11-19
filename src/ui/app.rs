@@ -953,6 +953,25 @@ fn item_color(tag: core::classify::Tag, category: Category) -> Color {
     }
 }
 
+fn browse_item_color(node: &Node) -> Color {
+    if node.directory && node.tag == core::classify::Tag::Personal {
+        const COLORS: [Color; 6] = [
+            Color::Rgb(73, 157, 255),
+            Color::Rgb(50, 220, 135),
+            Color::Rgb(255, 130, 48),
+            Color::Rgb(245, 65, 170),
+            Color::Rgb(44, 220, 218),
+            Color::Rgb(185, 135, 255),
+        ];
+        let hash = node.name.bytes().fold(5381usize, |hash, byte| {
+            hash.wrapping_mul(33).wrapping_add(byte as usize)
+        });
+        COLORS[hash % COLORS.len()]
+    } else {
+        item_color(node.tag, node.category)
+    }
+}
+
 fn fullness_color(percent: u64) -> Color {
     match percent {
         0..=69 => Color::Rgb(50, 220, 135),
@@ -1555,7 +1574,7 @@ fn draw(
                     .map(volume_color)
                     .unwrap_or(color)
             } else {
-                color
+                browse_item_color(n)
             };
             let name_style =
                 Style::default()
@@ -1787,15 +1806,9 @@ fn draw(
             "УДАЛИТЬ  ·  нажмите d ещё раз для перемещения в корзину",
         )
     } else if compact {
-        s.lang.text(
-            "j/k move  Enter open  Esc back  ?/m actions  q quit",
-            "j/k выбор  Enter открыть  Esc назад  ? действия  q выход",
-        )
+        s.lang.text("? actions  q quit", "? действия  q выход")
     } else {
-        s.lang.text(
-            "↑↓ move  Enter open  ← back  g culprit  a files  c cleanup  f filter  d Trash  l language  r rescan  ?/m actions  q quit",
-            "↑↓ выбор   Enter открыть   ← назад   g большая папка   a файлы   c очистка   f фильтр   l язык   d корзина   r скан   q выход",
-        )
+        s.lang.text("? actions  q quit", "? действия  q выход")
     };
     let warning = fit(warning, layout[2].width as usize);
     let status_width = layout[2].width.saturating_sub(42) as usize;
@@ -2306,12 +2319,50 @@ mod tests {
                 "{width}x{height}: {rendered}"
             );
             assert!(rendered.contains("actions"), "{width}x{height}: {rendered}");
+            assert!(
+                !rendered.contains("Enter open"),
+                "{width}x{height}: {rendered}"
+            );
+            assert!(
+                !rendered.contains("d Trash"),
+                "{width}x{height}: {rendered}"
+            );
             assert_eq!(
                 rendered.contains("DISK DETAILS"),
                 height >= 24,
                 "{width}x{height}: {rendered}"
             );
         }
+    }
+
+    #[test]
+    fn personal_folders_get_stable_distinct_name_colors() {
+        let sparkdesk = core::Node {
+            path: std::path::PathBuf::from("SparkDesk"),
+            name: "SparkDesk".into(),
+            size: 0,
+            files: 0,
+            directory: true,
+            atime: None,
+            mtime: None,
+            children: Vec::new(),
+            tag: core::classify::Tag::Personal,
+            category: core::categories::Category::ProjectsAndCode,
+            reason: None,
+        };
+        let sweep = core::Node {
+            name: "sweep".into(),
+            path: std::path::PathBuf::from("sweep"),
+            ..sparkdesk.clone()
+        };
+        assert_eq!(
+            super::browse_item_color(&sparkdesk),
+            super::browse_item_color(&sparkdesk)
+        );
+        assert_ne!(
+            super::browse_item_color(&sparkdesk),
+            super::browse_item_color(&sweep)
+        );
     }
 
     #[test]

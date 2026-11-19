@@ -27,3 +27,9 @@
 - Manual PTY verification: demo screen emitted truecolor RGB sequences; live scan immediately showed real `C:\` and `D:\` volumes. Both runs exited cleanly with `q`.
 - Final review: changes are limited to the TUI color/render behavior, its tests, and this execution checklist; no dependency or disk-cleanup behavior changed.
 - Commit and push as Pavel are the final authorized operations.
+
+## Follow-up visual refinement
+
+- User asked for visible per-folder color variation and the complete command list inside the popup instead of the footer.
+- Personal directories now use a stable name-derived accent while Junk/Unused/System safety colors stay higher priority. The footer now only points to the actions menu and quit; the popup retains the full labeled action list.
+- `cargo test --locked`: 35 passed. `cargo build --locked`: passed; the old running window had to close before Windows would replace the executable. Relaunched the updated Russian UI in a separate window.

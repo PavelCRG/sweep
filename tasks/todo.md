@@ -1,22 +1,22 @@
 # Sweep terminal UI implementation checklist
 
-- [ ] 1. Lock the screen hierarchy.
-- [ ] 2. Set category color tokens.
-- [ ] 3. Assign stable drive accents by mount identity.
-- [ ] 4. Color every category label.
-- [ ] 5. Make sidebar bars legible.
-- [ ] 6. Extend the disk usage band across the terminal width.
-- [ ] 7. Align disk totals and fullness state.
-- [ ] 8. Make drive rows distinct from usage composition.
-- [ ] 9. Differentiate folders and files.
-- [ ] 10. Prioritize safety tags.
-- [ ] 11. Style the selected row.
-- [ ] 12. Color the detail panel consistently.
-- [ ] 13. Verify compact, standard, and wide layouts.
-- [ ] 14. Build the centered action card.
-- [ ] 15. List all everyday actions with key hints.
-- [ ] 16. Complete menu keyboard behavior.
-- [ ] 17. Reuse existing action handlers.
-- [ ] 18. Preserve scan and cleanup safety rules.
-- [ ] 19. Add palette, geometry, menu, and layout tests.
-- [ ] 20. Format, test, build, visually review, commit, and push as Pavel.
+- [x] 1. Lock the screen hierarchy.
+- [x] 2. Set category color tokens and force TUI colors despite `NO_COLOR`.
+- [x] 3. Assign stable drive accents by sorted mount identity.
+- [x] 4. Color every category label.
+- [x] 5. Make sidebar bars legible.
+- [x] 6. Extend the disk usage band across the terminal width.
+- [x] 7. Align disk totals and fullness state.
+- [x] 8. Make drive rows distinct from usage composition.
+- [x] 9. Differentiate folders and files.
+- [x] 10. Prioritize safety tags.
+- [x] 11. Style the selected row.
+- [x] 12. Color the detail panel consistently.
+- [x] 13. Verify compact, standard, and wide layouts.
+- [x] 14. Build the centered action card.
+- [x] 15. List all everyday actions with key hints.
+- [x] 16. Complete menu keyboard behavior.
+- [x] 17. Reuse existing action handlers.
+- [x] 18. Preserve scan and cleanup safety rules.
+- [x] 19. Add palette, geometry, menu, and layout tests.
+- [x] 20. Format, test, build, visually review, commit, and push as Pavel.

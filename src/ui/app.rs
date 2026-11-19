@@ -9,6 +9,7 @@ use crossterm::{
         MouseEventKind,
     },
     execute,
+    style::Colored,
     terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
 };
 use ratatui::{prelude::*, widgets::*};
@@ -65,6 +66,7 @@ pub fn run(
     cancelled: Arc<AtomicBool>,
     initial_roots: Option<Vec<std::path::PathBuf>>,
 ) -> Result<(), Box<dyn std::error::Error>> {
+    enable_tui_colors();
     ensure_scan_root(nodes);
     enable_raw_mode()?;
     execute!(io::stdout(), EnterAlternateScreen, EnableMouseCapture)?;
@@ -597,6 +599,11 @@ pub fn run(
     Ok(())
 }
 
+fn enable_tui_colors() {
+    // The full-screen interface uses category accents; plain output is unaffected.
+    Colored::set_ansi_color_disabled(false);
+}
+
 enum ScanUpdate {
     Progress(core::scan::ScanProgress),
     RootProgress(std::path::PathBuf, core::scan::ScanProgress),
@@ -946,6 +953,14 @@ fn item_color(tag: core::classify::Tag, category: Category) -> Color {
     }
 }
 
+fn fullness_color(percent: u64) -> Color {
+    match percent {
+        0..=69 => Color::Rgb(50, 220, 135),
+        70..=89 => Color::Rgb(255, 196, 87),
+        _ => Color::Rgb(255, 102, 102),
+    }
+}
+
 fn category_data_by_volume(nodes: &[Node]) -> Vec<CategoryData> {
     nodes[0]
         .children
@@ -1094,13 +1109,15 @@ fn render_space_map(
             Style::default().fg(Color::Gray),
         ),
         Span::styled(
-            format!(
-                "{} {}  ·  {}%",
-                human(usage.free),
-                lang.text("free", "свободно"),
-                percent_full
-            ),
+            format!("{} {}", human(usage.free), lang.text("free", "свободно")),
             Style::default().fg(Color::Gray),
+        ),
+        Span::raw("  ·  "),
+        Span::styled(
+            format!("{}%", percent_full),
+            Style::default()
+                .fg(fullness_color(percent_full))
+                .add_modifier(Modifier::BOLD),
         ),
         Span::styled(
             if scanning {
@@ -1278,6 +1295,16 @@ fn menu_actions(
             lang.text("Open selected item", "Открыть выбранное"),
         ),
         (
+            KeyCode::Left,
+            "←",
+            lang.text("Go up one level", "На уровень выше"),
+        ),
+        (
+            KeyCode::Tab,
+            "Tab",
+            lang.text("Switch pane focus", "Переключить панель"),
+        ),
+        (
             KeyCode::Char('g'),
             "g",
             lang.text("Go to largest folder", "Перейти в большую папку"),
@@ -1300,7 +1327,19 @@ fn menu_actions(
         (
             KeyCode::Char('d'),
             "d",
-            lang.text("Move selected item to Trash", "Переместить в корзину"),
+            if scanning {
+                lang.text(
+                    "Trash cleanup unlocks after scan",
+                    "Очистка доступна после сканирования",
+                )
+            } else if demo {
+                lang.text(
+                    "Preview move to Trash",
+                    "Предпросмотр перемещения в корзину",
+                )
+            } else {
+                lang.text("Move selected item to Trash", "Переместить в корзину")
+            },
         ),
         (
             KeyCode::Char('l'),
@@ -1340,7 +1379,7 @@ fn draw_action_menu(
     };
     f.render_widget(Clear, popup);
     let block = Block::default()
-        .title(lang.text(" ACTIONS  ·  ? to close ", " ДЕЙСТВИЯ  ·  ? закрыть "))
+        .title(lang.text(" ACTIONS  ·  Esc to close ", " ДЕЙСТВИЯ  ·  Esc закрыть "))
         .borders(Borders::ALL)
         .border_type(BorderType::Rounded)
         .border_style(Style::default().fg(Color::Rgb(80, 190, 255)))
@@ -1418,6 +1457,7 @@ fn draw(
         return ScreenAreas::default();
     }
     let overview = s.current == 0;
+    let show_disks = overview && !s.junk_only && !s.largest_files && !s.only_junk;
     let current_path = nodes[s.current].path.display().to_string();
     let title = if overview {
         s.lang.text("Disk overview", "Обзор дисков")
@@ -1500,14 +1540,14 @@ fn draw(
                 _ => ("", color),
             };
             let name_width = if compact { 10 } else { 20 };
-            let name = if overview {
-                volume_name(n, demo, s.lang)
+            let name = if show_disks {
+                format!("● {}", volume_name(n, demo, s.lang))
             } else if n.directory {
                 format!("▸ {}", n.name)
             } else {
                 format!("· {}", n.name)
             };
-            let name_color = if overview {
+            let name_color = if show_disks {
                 nodes[0]
                     .children
                     .iter()
@@ -1520,7 +1560,7 @@ fn draw(
             let name_style =
                 Style::default()
                     .fg(name_color)
-                    .add_modifier(if overview || n.directory {
+                    .add_modifier(if show_disks || n.directory {
                         Modifier::BOLD
                     } else {
                         Modifier::empty()
@@ -1529,7 +1569,7 @@ fn draw(
                 format!("{:<name_width$} ", fit(&name, name_width)),
                 name_style,
             )];
-            if overview {
+            if show_disks {
                 let item_usage = nodes[0]
                     .children
                     .iter()
@@ -1537,12 +1577,15 @@ fn draw(
                     .and_then(|index| volume_usage.get(index).copied())
                     .unwrap_or_default();
                 row.extend(usage_spans(item_usage, if compact { 5 } else { 8 }));
-                row.push(Span::raw(format!(
-                    " {:>8} / {:>8} {:>3}%",
-                    human(item_usage.used()),
-                    human(item_usage.total()),
-                    percent(item_usage.used(), item_usage.total())
-                )));
+                row.push(Span::styled(
+                    format!(
+                        " {:>8} / {:>8} {:>3}%",
+                        human(item_usage.used()),
+                        human(item_usage.total()),
+                        percent(item_usage.used(), item_usage.total())
+                    ),
+                    Style::default().fg(Color::Gray),
+                ));
                 if !compact {
                     row.push(Span::styled(
                         format!(
@@ -1566,11 +1609,16 @@ fn draw(
                     "·".repeat(width - filled),
                     Style::default().fg(Color::DarkGray),
                 ));
-                row.push(Span::raw(format!(" {:>8} ", human(n.size))));
                 row.push(Span::styled(
-                    tag,
-                    Style::default().fg(color).add_modifier(Modifier::BOLD),
+                    format!(" {:>8} ", human(n.size)),
+                    Style::default().fg(Color::Gray),
                 ));
+                if !tag.is_empty() {
+                    row.push(Span::styled(
+                        format!("[{tag}]"),
+                        Style::default().fg(color).add_modifier(Modifier::BOLD),
+                    ));
+                }
                 if !compact {
                     if let Some(c) = core::browse::culprit(nodes, i).filter(|&c| c != i) {
                         row.push(Span::styled(
@@ -1623,7 +1671,7 @@ fn draw(
                 .max()
                 .unwrap_or(1)
                 .max(1);
-            let bar_width = if compact { 3 } else { 8 };
+            let bar_width = if compact { 5 } else { 8 };
             let filled = ((size as u128 * bar_width) / max as u128) as usize;
             let label = if compact {
                 short_category_name(*category, s.lang)
@@ -1657,7 +1705,7 @@ fn draw(
                         Style::default().fg(category_color(*category)),
                     ),
                     Span::styled(
-                        format!(" {:>7}", human(size)),
+                        format!(" {:>6}", human(size)),
                         Style::default().fg(Color::Gray),
                     ),
                 ]);
@@ -1740,15 +1788,16 @@ fn draw(
         )
     } else if compact {
         s.lang.text(
-            "↑↓ move Enter open ← up g folder a files c clean f filter d Trash ? menu q quit",
-            "↑↓ выбор Enter открыть ← назад g папка a файлы c очистка f фильтр l язык d корзина q выход",
+            "j/k move  Enter open  Esc back  ?/m actions  q quit",
+            "j/k выбор  Enter открыть  Esc назад  ? действия  q выход",
         )
     } else {
         s.lang.text(
-            "↑↓ move   Enter open   ← up   g largest folder   a files   c cleanup   f filter   l language   d Trash   r rescan   ? menu   q quit",
+            "↑↓ move  Enter open  ← back  g culprit  a files  c cleanup  f filter  d Trash  l language  r rescan  ?/m actions  q quit",
             "↑↓ выбор   Enter открыть   ← назад   g большая папка   a файлы   c очистка   f фильтр   l язык   d корзина   r скан   q выход",
         )
     };
+    let warning = fit(warning, layout[2].width as usize);
     let status_width = layout[2].width.saturating_sub(42) as usize;
     let status = fit(&s.status, status_width);
     f.render_widget(
@@ -1856,10 +1905,10 @@ fn details(
             Span::raw(format!("{}  ", lang.text("Type", "Тип"))),
             Span::styled(tag, Style::default().fg(item_color(n.tag, n.category))),
         ]),
-        Line::from(format!(
-            "{}  {category}",
-            lang.text("Category", "Категория")
-        )),
+        Line::from(vec![
+            Span::raw(format!("{}  ", lang.text("Category", "Категория"))),
+            Span::styled(category, Style::default().fg(category_color(n.category))),
+        ]),
         Line::from(format!(
             "{} {}",
             lang.text("Last open", "Открыт"),
@@ -2085,10 +2134,10 @@ fn usage_spans(usage: bar::Usage, width: usize) -> Vec<Span<'static>> {
     ];
     let widths = bar::segment_widths(&amounts, width);
     [
-        Color::Cyan,
-        Color::Red,
-        Color::Yellow,
-        Color::Magenta,
+        Color::Rgb(73, 157, 255),
+        Color::Rgb(255, 102, 102),
+        Color::Rgb(255, 196, 87),
+        Color::Rgb(185, 135, 255),
         Color::DarkGray,
     ]
     .into_iter()
@@ -2174,6 +2223,28 @@ mod tests {
     }
 
     #[test]
+    fn drive_rows_show_their_own_identity_marker() {
+        let mut nodes = core::demo::tree();
+        ensure_scan_root(&mut nodes);
+        let rendered = render_text(&nodes, Language::En, false);
+        assert!(rendered.contains("● System volume"), "{rendered}");
+        assert!(rendered.contains("● Media volume"), "{rendered}");
+    }
+
+    #[test]
+    fn cleanup_rows_keep_explicit_bracketed_tags() {
+        let mut nodes = core::demo::tree();
+        ensure_scan_root(&mut nodes);
+        let mut store = Store::new(&nodes, Language::En);
+        store.junk_only = true;
+        let rendered = render_with_store(&nodes, &store, false, 140, 38);
+        assert!(
+            rendered.contains("[JUNK]") || rendered.contains("[UNUSED]"),
+            "{rendered}"
+        );
+    }
+
+    #[test]
     fn action_menu_exposes_cleanup_and_hides_rescan_while_busy() {
         let ready = super::menu_actions(Language::En, false, false);
         assert!(ready
@@ -2182,45 +2253,88 @@ mod tests {
         assert!(ready
             .iter()
             .any(|(key, _, label)| { *key == KeyCode::Char('r') && label.contains("Rescan") }));
+        assert!(ready
+            .iter()
+            .any(|(key, _, label)| *key == KeyCode::Left && label.contains("level")));
+        assert!(ready
+            .iter()
+            .any(|(key, _, label)| *key == KeyCode::Tab && label.contains("pane")));
         let busy = super::menu_actions(Language::En, true, false);
         assert!(!busy.iter().any(|(key, _, _)| *key == KeyCode::Char('r')));
+        assert!(busy
+            .iter()
+            .any(|(key, _, label)| { *key == KeyCode::Char('d') && label.contains("after scan") }));
+        let demo = super::menu_actions(Language::En, false, true);
+        assert!(demo
+            .iter()
+            .any(|(key, _, label)| { *key == KeyCode::Char('d') && label.contains("Preview") }));
     }
 
     #[test]
     fn action_menu_renders_over_the_disk_view() {
         let mut nodes = core::demo::tree();
         ensure_scan_root(&mut nodes);
-        let volume_usage = volume_usages(&nodes, true);
         let mut store = Store::new(&nodes, Language::En);
         store.menu_open = true;
-        let mut terminal = Terminal::new(TestBackend::new(80, 24)).unwrap();
-        terminal
-            .draw(|frame| {
-                let _ = draw(
-                    frame,
-                    &nodes,
-                    &store,
-                    &volume_usage,
-                    &category_data_by_volume(&nodes),
-                    volume_usage[0],
-                    true,
-                    false,
-                );
-            })
-            .unwrap();
-        let rendered = terminal
-            .backend()
-            .buffer()
-            .content()
-            .iter()
-            .map(|cell| cell.symbol())
-            .collect::<String>();
-        assert!(rendered.contains("ACTIONS"), "{rendered}");
-        assert!(
-            rendered.contains("Move selected item to Trash"),
-            "{rendered}"
-        );
-        assert!(rendered.contains("Esc close"), "{rendered}");
+        for (width, height) in [(64, 18), (80, 24), (120, 30)] {
+            let rendered = render_with_store(&nodes, &store, false, width, height);
+            assert!(rendered.contains("ACTIONS"), "{width}x{height}: {rendered}");
+            assert!(
+                rendered.contains("Preview move to Trash"),
+                "{width}x{height}: {rendered}"
+            );
+            assert!(
+                rendered.contains("Esc close"),
+                "{width}x{height}: {rendered}"
+            );
+        }
+    }
+
+    #[test]
+    fn disk_overview_fits_compact_standard_and_wide_terminals() {
+        let mut nodes = core::demo::tree();
+        ensure_scan_root(&mut nodes);
+        let store = Store::new(&nodes, Language::En);
+        for (width, height) in [(64, 18), (80, 24), (120, 30)] {
+            let rendered = render_with_store(&nodes, &store, false, width, height);
+            assert!(
+                rendered.contains("Disk overview"),
+                "{width}x{height}: {rendered}"
+            );
+            assert!(
+                rendered.contains("CATEGORIES"),
+                "{width}x{height}: {rendered}"
+            );
+            assert!(rendered.contains("actions"), "{width}x{height}: {rendered}");
+            assert_eq!(
+                rendered.contains("DISK DETAILS"),
+                height >= 24,
+                "{width}x{height}: {rendered}"
+            );
+        }
+    }
+
+    #[test]
+    fn tui_color_policy_overrides_no_color_environment() {
+        crossterm::style::Colored::set_ansi_color_disabled(true);
+        super::enable_tui_colors();
+        assert!(!crossterm::style::Colored::ansi_color_disabled_memoized());
+        let sgr = crossterm::style::SetForegroundColor(crossterm::style::Color::Rgb {
+            r: 73,
+            g: 157,
+            b: 255,
+        })
+        .to_string();
+        assert!(sgr.contains("38;2;73;157;255"), "{sgr:?}");
+    }
+
+    #[test]
+    fn fullness_colors_warn_as_a_disk_fills() {
+        use ratatui::style::Color;
+
+        assert_eq!(super::fullness_color(50), Color::Rgb(50, 220, 135));
+        assert_eq!(super::fullness_color(80), Color::Rgb(255, 196, 87));
+        assert_eq!(super::fullness_color(95), Color::Rgb(255, 102, 102));
     }
 
     #[test]
@@ -2481,14 +2595,25 @@ mod tests {
     }
 
     fn render_text(nodes: &[core::Node], lang: Language, scanning: bool) -> String {
+        let store = Store::new(nodes, lang);
+        render_with_store(nodes, &store, scanning, 140, 38)
+    }
+
+    fn render_with_store(
+        nodes: &[core::Node],
+        store: &Store,
+        scanning: bool,
+        width: u16,
+        height: u16,
+    ) -> String {
         let volume_usage = volume_usages(nodes, true);
-        let mut terminal = Terminal::new(TestBackend::new(140, 38)).unwrap();
+        let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
         terminal
             .draw(|frame| {
                 let _ = draw(
                     frame,
                     nodes,
-                    &Store::new(nodes, lang),
+                    store,
                     &volume_usage,
                     &category_data_by_volume(nodes),
                     volume_usage[0],

@@ -1447,6 +1447,12 @@ fn draw_action_menu(
     );
 }
 
+fn dim_background(buffer: &mut ratatui::buffer::Buffer) {
+    for cell in &mut buffer.content {
+        cell.modifier.insert(Modifier::DIM);
+    }
+}
+
 fn draw(
     f: &mut Frame,
     nodes: &[Node],
@@ -1851,6 +1857,7 @@ fn draw(
         map_segments,
     };
     if s.menu_open {
+        dim_background(f.buffer_mut());
         let actions = menu_actions(s.lang, scanning, demo);
         draw_action_menu(f, area, &actions, s.menu_selected, s.lang);
     }
@@ -2203,7 +2210,7 @@ mod tests {
         ui::{bar, lang::Language, store::Store},
     };
     use crossterm::event::KeyCode;
-    use ratatui::{backend::TestBackend, Terminal};
+    use ratatui::{backend::TestBackend, layout::Rect, style::Modifier, Terminal};
 
     #[test]
     fn disk_accents_are_distinct_and_item_colors_follow_meaning() {
@@ -2281,6 +2288,9 @@ mod tests {
         assert!(demo
             .iter()
             .any(|(key, _, label)| { *key == KeyCode::Char('d') && label.contains("Preview") }));
+        assert!(ready
+            .iter()
+            .any(|(key, _, label)| { *key == KeyCode::Char('l') && label.contains("language") }));
     }
 
     #[test]
@@ -2301,6 +2311,16 @@ mod tests {
                 "{width}x{height}: {rendered}"
             );
         }
+    }
+
+    #[test]
+    fn action_menu_dims_the_underlying_screen() {
+        let mut buffer = ratatui::buffer::Buffer::empty(Rect::new(0, 0, 4, 2));
+        super::dim_background(&mut buffer);
+        assert!(buffer
+            .content
+            .iter()
+            .all(|cell| cell.modifier.contains(Modifier::DIM)));
     }
 
     #[test]

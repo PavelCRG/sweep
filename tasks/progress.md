@@ -33,3 +33,9 @@
 - User asked for visible per-folder color variation and the complete command list inside the popup instead of the footer.
 - Personal directories now use a stable name-derived accent while Junk/Unused/System safety colors stay higher priority. The footer now only points to the actions menu and quit; the popup retains the full labeled action list.
 - `cargo test --locked`: 35 passed. `cargo build --locked`: passed; the old running window had to close before Windows would replace the executable. Relaunched the updated Russian UI in a separate window.
+
+## Final modal and language refinement
+
+- The action menu now dims the already-rendered screen with the terminal DIM attribute, then draws the popup at full brightness.
+- English is explicitly the CLI default; the menu retains the language switch.
+- `cargo test --locked`: 37 passed. `cargo build --locked`: passed. Relaunched a fresh default-English window and confirmed its process responds.

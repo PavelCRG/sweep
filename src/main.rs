@@ -26,6 +26,7 @@ struct Args {
         long,
         value_enum,
         value_name = "LANG",
+        default_value = "en",
         conflicts_with_all = ["plain", "json", "csv", "compare", "check_updates"],
         help = "TUI language (en or ru)"
     )]
@@ -188,5 +189,13 @@ mod tests {
     #[test]
     fn cli_accepts_the_russian_interface_language() {
         assert!(Args::try_parse_from(["sweep", "--lang", "ru"]).is_ok());
+    }
+
+    #[test]
+    fn cli_defaults_to_english_interface_language() {
+        assert_eq!(
+            Args::try_parse_from(["sweep"]).unwrap().lang,
+            Some(crate::ui::lang::Language::En)
+        );
     }
 }

@@ -39,3 +39,10 @@
 - The action menu now dims the already-rendered screen with the terminal DIM attribute, then draws the popup at full brightness.
 - English is explicitly the CLI default; the menu retains the language switch.
 - `cargo test --locked`: 37 passed. `cargo build --locked`: passed. Relaunched a fresh default-English window and confirmed its process responds.
+
+## Scan performance refinement
+
+- Baseline on the same warm local `target` tree (~27k entries), debug CLI runs: 3.48 s, 2.76 s, 3.17 s (median 3.17 s).
+- Replaced whole-path lowercase allocations in category detection with case-insensitive comparisons over path components and the filename. Category precedence and uppercase matching are covered by the existing test.
+- After the change, debug runs: 2.47 s, 3.06 s, 2.47 s (median 2.47 s, about 22% faster than baseline). Release runs: 1.97 s, 1.93 s, 1.92 s (median 1.93 s).
+- `cargo test --locked`: 37 passed. `cargo build --locked` and `cargo build --locked --release`: passed. The separate window now runs the release binary.

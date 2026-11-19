@@ -11,59 +11,76 @@ pub enum Category {
 }
 
 pub fn category(path: &Path) -> Category {
-    let s = path.to_string_lossy().to_lowercase();
-    let n = path
-        .file_name()
-        .unwrap_or_default()
-        .to_string_lossy()
-        .to_lowercase();
-    let has_component = |names: &[&str]| s.split(['\\', '/']).any(|part| names.contains(&part));
-    if s.contains("download") {
-        Category::Downloads
-    } else if [
-        "node_modules",
-        "target",
-        ".cache",
-        "temp",
-        ".venv",
-        "__pycache__",
-    ]
-    .contains(&n.as_str())
-        || has_component(&[
+    let mut download = false;
+    let mut cache = false;
+    let mut project = false;
+    let mut media = false;
+    for component in path.components() {
+        let component = component.as_os_str().to_string_lossy();
+        download |= contains_ascii_case_insensitive(&component, "download");
+        cache |= [
             "node_modules",
             "target",
             ".cache",
             "temp",
             ".venv",
             "__pycache__",
-        ])
-    {
-        Category::CachesAndTemp
-    } else if has_component(&[
-        "project",
-        "projects",
-        "src",
-        "source",
-        "developer",
-        "development",
-        "code",
-        "repositories",
-        "repo",
-    ]) || [".rs", ".py", ".js", ".toml", ".git"]
+        ]
         .iter()
-        .any(|e| s.ends_with(e))
+        .any(|name| component.eq_ignore_ascii_case(name));
+        project |= [
+            "project",
+            "projects",
+            "src",
+            "source",
+            "developer",
+            "development",
+            "code",
+            "repositories",
+            "repo",
+        ]
+        .iter()
+        .any(|name| component.eq_ignore_ascii_case(name));
+        media |= [
+            "media", "photos", "pictures", "videos", "movies", "music", "archives",
+        ]
+        .iter()
+        .any(|name| component.eq_ignore_ascii_case(name));
+    }
+    let name = path.file_name().unwrap_or_default().to_string_lossy();
+    if download {
+        Category::Downloads
+    } else if cache {
+        Category::CachesAndTemp
+    } else if project
+        || [".rs", ".py", ".js", ".toml", ".git"]
+            .iter()
+            .any(|extension| ends_with_ascii_case_insensitive(&name, extension))
     {
         Category::ProjectsAndCode
-    } else if has_component(&[
-        "media", "photos", "pictures", "videos", "movies", "music", "archives",
-    ]) || [".mp4", ".mkv", ".mp3", ".zip", ".tar", ".gz"]
-        .iter()
-        .any(|e| s.ends_with(e))
+    } else if media
+        || [".mp4", ".mkv", ".mp3", ".zip", ".tar", ".gz"]
+            .iter()
+            .any(|extension| ends_with_ascii_case_insensitive(&name, extension))
     {
         Category::MediaAndArchives
     } else {
         Category::Other
     }
+}
+
+fn contains_ascii_case_insensitive(value: &str, needle: &str) -> bool {
+    value
+        .as_bytes()
+        .windows(needle.len())
+        .any(|part| part.eq_ignore_ascii_case(needle.as_bytes()))
+}
+
+fn ends_with_ascii_case_insensitive(value: &str, suffix: &str) -> bool {
+    value
+        .as_bytes()
+        .strip_suffix(suffix.as_bytes())
+        .is_some_and(|part| part.eq_ignore_ascii_case(suffix.as_bytes()))
 }
 
 #[cfg(test)]
@@ -88,6 +105,18 @@ mod tests {
         assert_eq!(
             category(Path::new("/home/user/Projects/api/target/debug/app")),
             Category::CachesAndTemp
+        );
+        assert_eq!(
+            category(Path::new("D:/DOWNLOADS/archive.ZIP")),
+            Category::Downloads
+        );
+        assert_eq!(
+            category(Path::new("D:/Projects/Target/BUILD.EXE")),
+            Category::CachesAndTemp
+        );
+        assert_eq!(
+            category(Path::new("/home/user/VIDEOS/CLIP.MKV")),
+            Category::MediaAndArchives
         );
     }
 }
